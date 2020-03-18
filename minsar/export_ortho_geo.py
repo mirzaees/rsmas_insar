@@ -85,7 +85,7 @@ def main(iargs=None):
 
         try:
             if config[step_name]['adjust'] == 'True':
-                walltimelimit = putils.walltime_adjust(config[step_name]['walltime'])
+                walltimelimit = putils.walltime_adjust(inps.num_bursts, config[step_name]['walltime'])
             else:
                 walltimelimit = config[step_name]['walltime']
         except:
@@ -106,7 +106,7 @@ def main(iargs=None):
         putils.move_out_job_files_to_stdout(run_file=item)
 
     #upload_to_s3(pic_dir)
-    minsar.upload_data_products.main([inps.custom_template_file, '--image_products'])
+    minsar.upload_data_products.main([inps.custom_template_file, '--imageProducts'])
 
     return
 

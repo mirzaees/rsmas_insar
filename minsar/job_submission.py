@@ -19,6 +19,7 @@ import sys
 import subprocess
 import argparse
 import time
+import glob
 import numpy as np
 from minsar.objects import message_rsmas
 import warnings
@@ -39,7 +40,8 @@ def create_argument_parser():
     group.add_argument("file", type=str, help="The file to batch create")
     group.add_argument("--memory", dest="memory", default=3600, metavar="MEMORY (KB)",
                        help="Amount of memory to allocate, specified in kilobytes")
-    group.add_argument("--walltime", dest="wall", default="4:00", metavar="WALLTIME (HH:MM)",
+    #group.add_argument("--walltime", dest="wall", default="4:00", metavar="WALLTIME (HH:MM)",
+    group.add_argument("--walltime", dest="wall", metavar="WALLTIME (HH:MM)",
                        help="Amount of wall time to use, in HH:MM format")
     group.add_argument("--queuename", dest="queue", metavar="QUEUE", help="Name of queue to submit job to")
     group.add_argument("--outdir", dest="outdir", default='run_files', metavar="OUTDIR",
@@ -64,8 +66,8 @@ def parse_arguments(args):
             job_params.queue = "general"
         if scheduler == "PBS":
             job_params.queue = "batch"
-        if scheduler == 'SLURM':
-            job_params.queue = "normal"
+        #if scheduler == 'SLURM':
+        #    job_params.queue = "skx-normal"
 
     job_params.file = os.path.abspath(job_params.file)
     job_params.work_dir = os.path.join(os.getenv('SCRATCHDIR'),
@@ -73,6 +75,10 @@ def parse_arguments(args):
 
     if job_params.outdir == 'run_files':
         job_params.outdir = os.path.join(job_params.work_dir, job_params.outdir)
+
+    job_params.custom_template_file = glob.glob(job_params.work_dir + '/*.template')[0]
+    job_params = putils.create_default_template(job_params)
+    job_params.num_bursts = putils.get_number_of_bursts(job_params)
 
     return job_params
 
@@ -154,6 +160,7 @@ def get_job_file_lines(job_name, job_file_name, email_notif, work_dir, scheduler
     ]
     if email_notif:
         job_file_lines.append(prefix + email_option.format(os.getenv("NOTIFICATIONEMAIL")))
+
     job_file_lines.extend([
         prefix + process_option.format(number_of_nodes, number_of_tasks),
         prefix + stdout_option.format(os.path.join(work_dir, job_file_name)),
@@ -287,7 +294,7 @@ def submit_single_job(job_file_name, work_dir, scheduler=None):
     return job_number
 
 
-def submit_script(job_name, job_file_name, argv, work_dir, walltime=None, email_notif=True):
+def submit_script(job_name, job_file_name, argv, work_dir, walltime=None, number_of_bursts=1, email_notif=True):
     """
     Submits a single script as a job. (compare to submit_batch_jobs for several tasks given in run_file)
     :param job_name: Name of job.
@@ -306,15 +313,18 @@ def submit_script(job_name, job_file_name, argv, work_dir, walltime=None, email_
     command_line = os.path.basename(argv[0]) + " "
     command_line += " ".join(flag for flag in argv[1:] if flag != "--submit")
 
-    memory, walltime, num_threads = get_memory_walltime(job_file_name, job_type='script', wall_time=walltime)
+    memory, wall_time, num_threads = get_memory_walltime(job_file_name, job_type='script', wall_time=walltime, num_bursts=number_of_bursts)
+
+    if not walltime in [None, 'None']:
+        wall_time = walltime        
 
     write_single_job_file(job_name, job_file_name, command_line, work_dir, email_notif,
-                          walltime=walltime, queue=os.getenv("QUEUENAME"))
+                          walltime=wall_time, queue=os.getenv("QUEUENAME"))
 
     return submit_single_job("{0}.job".format(job_file_name), work_dir)
 
 
-def submit_batch_jobs(batch_file, out_dir='./run_files', work_dir='.', memory=None, walltime=None, queue=None):
+def submit_batch_jobs(batch_file, out_dir='./run_files', work_dir='.', memory=None, walltime=None, queue=None, num_bursts=1):
     """
     submit jobs based on scheduler
     :param batch_file: batch job name
@@ -333,7 +343,7 @@ def submit_batch_jobs(batch_file, out_dir='./run_files', work_dir='.', memory=No
         print('\nWorking on a {} machine ...\n'.format(os.getenv('JOBSCHEDULER')))
 
         maxmemory, wall_time, num_threads = get_memory_walltime(batch_file, job_type='batch', wall_time=walltime,
-                                                                      memory=memory)
+                                                                memory=memory, num_bursts=num_bursts)
 
         if queue is None:
             queue = os.getenv('QUEUENAME')
@@ -344,7 +354,11 @@ def submit_batch_jobs(batch_file, out_dir='./run_files', work_dir='.', memory=No
                                      number_of_threads=num_threads, queue=queue)
         else:
 
-            jobs = submit_jobs_individually(batch_file=batch_file, out_dir=out_dir, memory=maxmemory,
+            if (os.getenv('JOB_SUBMISSION_SCHEME') == 'singlefile_parallel_LSF_parallel'):      # FA 3/20 temporarily. Will be: if (PARAMS.method=='parallel'):
+                jobs = submit_parallel_jobs(batch_file=batch_file, out_dir=out_dir, memory=maxmemory,
+                                                walltime=wall_time, queue='parallel')
+            else:
+                jobs = submit_jobs_individually(batch_file=batch_file, out_dir=out_dir, memory=maxmemory,
                                             walltime=wall_time, queue=queue)
 
         return True
@@ -359,7 +373,7 @@ def submit_batch_jobs(batch_file, out_dir='./run_files', work_dir='.', memory=No
 
         return False
 
-
+###################################################################################################
 def submit_jobs_individually(batch_file, out_dir='./run_files', memory='4000', walltime='2:00',
                       queue='general', scheduler=None):
     """
@@ -405,6 +419,52 @@ def submit_jobs_individually(batch_file, out_dir='./run_files', memory='4000', w
 
     return batch_file
 
+
+def submit_parallel_jobs(batch_file, out_dir='./run_files', memory='4000', walltime='2:00',
+                      queue='parallel', scheduler=None):
+    # FA 3/20: not working yet. This is a copy of submit_jobs_individually and need to be made work
+    """
+    Submit a batch of jobs (to bsub or qsub) and wait for output files to exist before exiting. This is used in pegasus (LSF)
+    :param batch_file: File containing jobs that we are submitting.
+    :param out_dir: Output directory for run files.
+    :param work_dir: project directory
+    :param memory: Amount of memory to use. Defaults to 3600 KB.
+    :param walltime: Walltime for the job. Defaults to 4 hours.
+    :param scheduler: Job scheduler to use for running jobs. Defaults based on environment variable JOBSCHEDULER.
+    :param queue: Name of the queue to which the job is to be submitted. Default is set based on the scheduler.
+    """
+
+    # FA 3/20: need write_parallel_job_files (or option for parallel file writing). Would use get_job_file_lines(... number_of_tasks=PARAMS.number_of_tasks ...)
+    job_files = write_batch_job_files(batch_file, out_dir, memory=memory, walltime=walltime, queue=queue)
+
+    if not scheduler:
+        scheduler = os.getenv("JOBSCHEDULER")
+
+    os.chdir(out_dir)
+
+    files = []
+
+    for i, job in enumerate(job_files):
+        job_number = submit_single_job(job, out_dir, scheduler)
+        job_file_name = job.split(".")[0]
+        files.append("{}_{}.o".format(job_file_name, job_number))
+        # files.append("{}_{}.e".format(job_file_name, job_number))
+        if len(job_files) < 100 or i == 0 or i % 50 == 49:
+            print("Submitting from {0}: job #{1} of {2} jobs".format(os.path.abspath(batch_file).split(os.sep)[-1], i+1, len(job_files)))
+
+    # check if output files exist
+    i = 0
+    wait_time_sec = 60
+    total_wait_time_min = 0
+    while i < len(files):
+        if os.path.isfile(files[i]):
+            print("Job #{} of {} complete (output file {})".format(i+1, len(files), files[i]))
+            i += 1
+        else:
+            print("Waiting for job #{} of {} (output file {}) after {} minutes".format(i+1, len(files), files[i], total_wait_time_min))
+            total_wait_time_min += wait_time_sec/60
+            time.sleep(wait_time_sec)
+
 def submit_job_with_launcher(batch_file, out_dir='./run_files', memory='4000', walltime='2:00',
                              number_of_threads=4, queue='general', scheduler=None, email_notif=True):
     """
@@ -427,12 +487,18 @@ def submit_job_with_launcher(batch_file, out_dir='./run_files', memory='4000', w
         lines = f.readlines()
         number_of_tasks = len(lines)
 
+    number_of_parallel_tasks = number_of_tasks
+    
+    # walltime_factor = number_of_tasks / number_of_parallel_tasks  #need to implement: factor to multiply to update walltimes ( use process_utilities.py:def multiply_walltime(wall_time, factor) )
+
     job_file_name = os.path.basename(batch_file)
     job_name = job_file_name
 
-    # stampede has 68 cores per node and 4 threads per core = 272 threads per node
-    # but it is usually suggested to use 1-2 threads per core and no more than 66-67 cores per node
-    number_of_nodes = np.int(np.ceil(number_of_tasks * float(number_of_threads) / (66.0 * 2.0)))
+    # Stampede2's skx-normal queue has 48 cores per node, each has 2 threads, is is suggested not to use all cores
+    number_of_cores_per_node = int(os.getenv('NUMBER_OF_CORES_PER_NODE'))
+    number_of_threads_per_core = int(os.getenv('NUMBER_OF_THREADS_PER_CORE'))
+    #number_of_nodes = np.int(np.ceil(number_of_parallel_tasks * float(number_of_threads) / (46.0 * 2.0)))
+    number_of_nodes = np.int(np.ceil(number_of_parallel_tasks * float(number_of_threads) / ((number_of_cores_per_node - 1) * number_of_threads_per_core)))
 
     # get lines to write in job file
     job_file_lines = get_job_file_lines(job_name, job_file_name, email_notif, out_dir, scheduler, memory, walltime,
@@ -440,6 +506,7 @@ def submit_job_with_launcher(batch_file, out_dir='./run_files', memory='4000', w
 
     job_file_lines.append("\n\nmodule load launcher")
 
+    #job_file_lines.append("\nexport LAUNCHER_NPROCS={0}".format(number_of_parallel_tasks))
     job_file_lines.append("\nexport OMP_NUM_THREADS={0}".format(number_of_threads))
     job_file_lines.append("\nexport LAUNCHER_WORKDIR={0}".format(out_dir))
     job_file_lines.append("\nexport LAUNCHER_JOB_FILE={0}\n".format(batch_file))
@@ -484,8 +551,9 @@ def submit_job_with_launcher(batch_file, out_dir='./run_files', memory='4000', w
             status = 'complete'
     return
 
+###################################################################################################
 
-def get_memory_walltime(job_name, job_type='batch', wall_time=None, memory=None):
+def get_memory_walltime(job_name, job_type='batch', wall_time=None, memory=None, num_bursts=1):
     """
     get memory and walltime for the job from job_defaults.cfg
     :param job_name: the job file name
@@ -502,30 +570,33 @@ def get_memory_walltime(job_name, job_type='batch', wall_time=None, memory=None)
         step_name = '_'
         step_name = step_name.join(job_name.split('/')[-1].split('_')[2::])
 
-        if memory is None:
+        if memory in [None, 'None']:
 
             if step_name in config:
                 memory = config[step_name]['memory']
             else:
                 memory = config['DEFAULT']['memory']
 
-        if wall_time is None:
-
+        if wall_time in [None, 'None']:
             if step_name in config:
                 wall_time = config[step_name]['walltime']
+                if config[step_name]['adjust'] == 'True':
+                    wall_time = putils.walltime_adjust(num_bursts, wall_time)
             else:
                 wall_time = config['DEFAULT']['walltime']
 
         if step_name in config:
             num_threads = config[step_name]['num_threads']
         else:
-            num_threads = config[step_name]['num_threads']
+            num_threads = config['DEFAULT']['num_threads']
 
     elif job_type == 'script':
-
-        if wall_time is None:
+    
+        if wall_time in [None, 'None']:
             if job_name in config:
                 wall_time = config[job_name]['walltime']
+                if config[job_name]['adjust'] == 'True':
+                    wall_time = putils.walltime_adjust(num_bursts, wall_time)
             else:
                 wall_time = config['DEFAULT']['walltime']
 
@@ -535,4 +606,4 @@ def get_memory_walltime(job_name, job_type='batch', wall_time=None, memory=None)
 if __name__ == "__main__":
     PARAMS = parse_arguments(sys.argv[1::])
     status = submit_batch_jobs(PARAMS.file, PARAMS.outdir, PARAMS.work_dir, memory=PARAMS.memory,
-                               walltime=PARAMS.wall, queue=PARAMS.queue)
+                               walltime=PARAMS.wall, queue=PARAMS.queue, num_bursts=PARAMS.num_bursts)

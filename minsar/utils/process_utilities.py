@@ -14,13 +14,15 @@ import configparser
 import argparse
 import numpy as np
 import h5py
+import math
 from natsort import natsorted
 import xml.etree.ElementTree as ET
 import shutil
 from mintpy.defaults.auto_path import autoPath
 from minsar.objects.dataset_template import Template
 from minsar.objects.auto_defaults import PathFind
-
+from minsar.objects.sentinel1_override import Sentinel1_burst_count
+from stackSentinel import cmdLineParse as stack_cmd
 import minsar.job_submission as js
 
 pathObj = PathFind()
@@ -51,7 +53,7 @@ def cmd_line_parse(iargs=None, script=None):
 
     inps = parser.parse_args(args=iargs)
     inps = create_or_update_template(inps)
-
+    
     return inps
 
 
@@ -74,7 +76,9 @@ def add_download_data(parser):
     flag_parser.add_argument('--delta_lat', dest='delta_lat', default='0.0', type=float,
                         help='delta to add to latitude from boundingBox field, default is 0.0')
     flag_parser.add_argument('--seasonalStartDate', dest='seasonalStartDate', type=str, help ='seasonal start date to specify download dates within start and end dates, example: a seasonsal start date of January 1 would be added as --seasonalEndDate 0101')
-    flag_parser.add_argument('--seasonalEndDate', dest='seasonalEndDate', type=str, help ='seasonal end date to specify download dates within start and end dates, example: a seasonsal end date of December 31 would be added as --seasonalEndDate 1231')    
+    flag_parser.add_argument('--seasonalEndDate', dest='seasonalEndDate', type=str, help ='seasonal end date to specify download dates within start and end dates, example: a seasonsal end date of December 31 would be added as --seasonalEndDate 1231')
+    flag_parser.add_argument('--parallel', dest='parallel', type=str, help ='determines whether a parallel download is required with a yes/no')
+    flag_parser.add_argument('--processes', dest='processes', type=int, help ='specifies number of processes for the parallel download, if no value is provided then the number of processors from os.cpu_count() is used')
 
     return parser
 
@@ -82,13 +86,13 @@ def add_download_data(parser):
 def add_upload_data_products(parser):
 
     flag_parser = parser.add_argument_group('upload data products flags')
-    flag_parser.add_argument('--mintpy-products',
-                        dest='flag_mintpy_products',
+    flag_parser.add_argument('--mintpyProducts',
+                        dest='mintpy_products_flag',
                         action='store_true',
                         default=False,
                         help='uploads mintpy data products to data portal')
-    flag_parser.add_argument('--image_products',
-                        dest='flag_image_products',
+    flag_parser.add_argument('--imageProducts',
+                        dest='image_products_flag',
                         action='store_true',
                         default=False,
                         help='uploads image data products to data portal')
@@ -119,6 +123,10 @@ def add_execute_runfiles(parser):
                         help='starting run file number (default = 1).\n')
     run_parser.add_argument('--stop', dest='end_run', default=0, type=int,
                         help='stopping run file number.\n')
+    run_parser.add_argument('--dostep', dest='step', type=int, metavar='STEP',
+                      help='run processing at the # step only')
+    run_parser.add_argument('--numBursts', dest='num_bursts', metavar='number of bursts',
+                         help='walltime for submitting the script as a job')
 
     return parser
 
@@ -175,10 +183,8 @@ def add_process_rsmas(parser):
                       help='start processing at the named step, default: {}'.format(STEP_LIST[0]))
     prs.add_argument('--stop', dest='end_step', metavar='STEP', default=STEP_LIST[-1],
                       help='end processing at the named step, default: {}'.format(STEP_LIST[-1]))
-    prs.add_argument('--step', dest='step', metavar='STEP',
+    prs.add_argument('--dostep', dest='step', metavar='STEP',
                       help='run processing at the named step only')
-    prs.add_argument('--insarmaps', action='store_true', dest='insarmap', default=False,
-                        help='Email insarmaps results')
 
     return parser
 
@@ -415,6 +421,7 @@ def rerun_job_if_exit_code_140(run_file):
 
 ##########################################################################
 
+
 def create_rerun_run_file(job_files):
     """Write job file commands into rerun run file"""
     
@@ -436,6 +443,7 @@ def create_rerun_run_file(job_files):
 
 ##########################################################################
 
+
 def extract_attribute_from_hdf_file(file,attribute):
     """
     extract attribute from an HDF5 file
@@ -452,6 +460,7 @@ def extract_attribute_from_hdf_file(file,attribute):
 
 ##########################################################################
 
+
 def extract_walltime_from_job_file(file):
     """ Extracts the walltime from an LSF (BSUB) job file """
     with open(file) as fr:
@@ -464,6 +473,7 @@ def extract_walltime_from_job_file(file):
 
 ##########################################################################
 
+
 def extract_memory_from_job_file(file):
     """ Extracts the memory from an LSF (BSUB) job file """
     with open(file) as fr:
@@ -475,6 +485,7 @@ def extract_memory_from_job_file(file):
                 return memory
 
 ##########################################################################
+
 
 def get_line_before_last(file):
     """get the line before last from a file"""
@@ -489,6 +500,7 @@ def get_line_before_last(file):
     return
 
 ##########################################################################
+
 
 def find_completed_jobs_matching_search_string(run_file,search_string):
     """returns names of files that match seasrch strings (*.e files in run_files)."""
@@ -514,6 +526,8 @@ def find_completed_jobs_matching_search_string(run_file,search_string):
     return file_list, job_file_list
 
 ##########################################################################
+
+
 def raise_exception_if_job_exited(run_file):
     """Removes files with zero size or zero length (*.e files in run_files)."""
     
@@ -612,16 +626,18 @@ def move_out_job_files_to_stdout(run_file):
 
     dir_name = os.path.dirname(run_file)
     out_folder = dir_name + '/stdout_' + os.path.basename(run_file)
-    if not os.path.isdir(out_folder):
-        os.mkdir(out_folder)
-    else:
-        shutil.rmtree(out_folder)
-        os.mkdir(out_folder)
+    
+    if len(job_files) >= 2:
+        if not os.path.isdir(out_folder):
+            os.mkdir(out_folder)
+        else:
+            shutil.rmtree(out_folder)
+            os.mkdir(out_folder)
 
-    for item in stdout_files:
-        shutil.move(item, out_folder)
-    for item in job_files:
-        shutil.move(item, out_folder)
+        for item in stdout_files:
+            shutil.move(item, out_folder)
+        for item in job_files:
+            shutil.move(item, out_folder)
 
     return None
 
@@ -689,32 +705,53 @@ def xmlread(filename):
 ############################################################################
 
 
-def walltime_adjust(inps, default_time):
+def get_number_of_bursts(inps_dict):
     """ calculates the number of bursts based on boundingBox and returns an adjusting factor for walltimes """
 
-    from minsar.objects.sentinel1_override import Sentinel1_burst_count
-    from argparse import Namespace
+    try:
+        topsStack_template = pathObj.correct_for_isce_naming_convention(inps_dict)
+        command_options = []
+        for item in topsStack_template:
+            if item == 'useGPU':
+                if topsStack_template[item] == 'True':
+                    command_options = command_options + ['--' + item]
+            elif not topsStack_template[item] is None:
+                command_options = command_options + ['--' + item] + [topsStack_template[item]]
 
-    inps_dict = inps
-    pathObj.correct_for_isce_naming_convention(inps_dict)
-    inps_dict = Namespace(**inps_dict.template)
+        inps = stack_cmd(command_options)
+    
+        if inps.swath_num is None:
+            swaths = [1, 2, 3]
+        else:
+            swaths = [int(i) for i in inps.swath_num.split()]
 
-    if inps_dict.swath_num is None:
-        swaths = [1, 2, 3]
-    else:
-        swaths = [int(i) for i in inps_dict.swath_num.split()]
+        number_of_bursts = 0
 
-    number_of_bursts = 0
+        for swath in swaths:
+            obj = Sentinel1_burst_count()
+            obj.configure()
+            number_of_bursts = number_of_bursts + obj.get_burst_num(inps, swath)
+    except:
+        number_of_bursts = 1
+    print('number of bursts: {}'.format(number_of_bursts))
+    
+    return number_of_bursts
+    
+############################################################################
 
-    for swath in swaths:
-        obj = Sentinel1_burst_count()
-        obj.configure()
-        number_of_bursts = number_of_bursts + obj.get_burst_num(inps_dict, swath)
 
-    default_time_hour = float(default_time.split(':')[0]) + float(default_time.split(':')[1]) / 60
-    hour = (default_time_hour * number_of_bursts)*60
-    minutes = int(np.remainder(hour, 60))
-    hour = int(hour/60)
+def walltime_adjust(number_of_bursts, default_time, scheduler='SLURM'):
+    """ multiplys default walltime by number of bursts and returns adjusted walltime """
+    
+    default_time_minutes = float(default_time.split(':')[0]) * 60 + float(default_time.split(':')[1])
+    new_time_minutes = default_time_minutes * number_of_bursts
+
+    if scheduler == 'LSF':
+        factor = 6
+        new_time_minutes *= factor
+
+    hour = int(new_time_minutes/60)
+    minutes = int(np.remainder(new_time_minutes, 60))
     adjusted_time = '{:02d}:{:02d}'.format(hour, minutes)
 
     return adjusted_time
@@ -734,21 +771,65 @@ def pause_seconds(wait_time):
 
 
 def multiply_walltime(wall_time, factor):
-    """ increase the walltime in HH:MM format by factor """
+    """ multiply walltime in HH:MM or HH:MM:SS format by factor """
 
     wall_time_parts = [int(s) for s in wall_time.split(':')]
-    minutes = wall_time_parts[1] * factor 
-    hours = wall_time_parts[0] * factor 
 
-    minutes = minutes + ( hours - int(hours)) * 60
-    hours = int(hours)
+    hours = wall_time_parts[0] 
+    minutes = wall_time_parts[1] 
 
-    hours = hours + int(minutes/60)
-    minutes = minutes - int(minutes/60) * 60
+    try:
+        seconds = wall_time_parts[2]
+    except:
+        seconds = 0
 
-    new_wall_time = '{:02d}:{:02d}'.format(hours,int(round( minutes)))
+    seconds_total = seconds + minutes * 60 + hours * 3600
+    seconds_new = seconds_total * factor
 
+    hours = math.floor( seconds_new / 3600 )
+    minutes = math.floor( (seconds_new - hours * 3600) / 60 )
+    seconds = math.floor( (seconds_new - hours * 3600 - minutes*60) )
+    new_wall_time = '{:02d}:{:02d}:{:02d}'.format(hours, minutes,seconds)
+
+    if len(wall_time_parts) == 2:
+       new_wall_time = '{:02d}:{:02d}'.format(hours, minutes)
+    else:
+       new_wall_time = '{:02d}:{:02d}:{:02d}'.format(hours, minutes,seconds)
+    
     return new_wall_time
+
+############################################################################
+
+
+def sum_time(time_str_list):
+    """ sum time in HH:MM or HH:MM:SS format """
+
+    seconds_sum = 0
+
+    for item in time_str_list:
+       item_parts = [int(s) for s in item.split(':')]
+
+       hours = item_parts[0] 
+       minutes = item_parts[1] 
+
+       try:
+           seconds = item_parts[2]
+       except:
+           seconds = 0
+
+       seconds_total = seconds + minutes * 60 + hours * 3600
+       seconds_sum = seconds_sum + seconds_total
+
+    hours   = math.floor( seconds_sum / 3600 )
+    minutes = math.floor( (seconds_sum - hours * 3600) / 60 )
+    seconds = math.floor( (seconds_sum - hours * 3600 - minutes*60) )
+    
+    if len(item_parts) == 2:
+       new_time_str = '{:02d}:{:02d}'.format(hours, minutes)
+    else:
+       new_time_str = '{:02d}:{:02d}:{:02d}'.format(hours, minutes,seconds)
+    
+    return new_time_str
 
 ############################################################################
 

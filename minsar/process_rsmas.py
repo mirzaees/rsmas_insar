@@ -31,7 +31,7 @@ EXAMPLE = """example:
       process_rsmas.py  -h / --help                       # help
       process_rsmas.py  -H                                # print    default template options
       # Run with --start/stop/step options
-      process_rsmas.py GalapagosSenDT128.template --step  download        # run the step 'download' only
+      process_rsmas.py GalapagosSenDT128.template --dostep  download        # run the step 'download' only
       process_rsmas.py GalapagosSenDT128.template --start download        # start from the step 'download'
       process_rsmas.py GalapagosSenDT128.template --stop  ifgrams         # end after step 'interferogram'
     """
@@ -75,13 +75,14 @@ def main(iargs=None):
     #########################################
     if inps.submit_flag:
         job_file_name = 'process_rsmas'
-        job = js.submit_script(inps.project_name, job_file_name, sys.argv[:], inps.work_dir)
+        job = js.submit_script(inps.project_name, job_file_name, sys.argv[:], inps.work_dir, walltime=inps.wall_time)
         # run_operations.py needs this print statement for now.
         # This is not for debugging purposes.
         # DO NOT REMOVE.
         print(job)
 
     else:
+        inps.num_bursts = putils.get_number_of_bursts(inps)
         objInsar = RsmasInsar(inps)
         objInsar.run(steps=inps.runSteps)
 
@@ -156,6 +157,7 @@ class RsmasInsar:
         self.work_dir = inps.work_dir
         self.project_name = inps.project_name
         self.template = inps.template
+        self.num_bursts = str(inps.num_bursts)
 
         if 'demMethod' in inps.template and inps.template['demMethod'] == 'boundingBox':
             self.dem_flag = '--boundingBox'
@@ -197,7 +199,7 @@ class RsmasInsar:
             minsar.create_runfiles.main([self.custom_template_file])
         except:
             print('Skip creating run files ...')
-        minsar.execute_runfiles.main([self.custom_template_file])
+        minsar.execute_runfiles.main([self.custom_template_file, '--numBursts', self.num_bursts])
         return
 
     def run_timeseries(self):
@@ -213,19 +215,13 @@ class RsmasInsar:
     def run_insarmaps(self):
         """ prepare outputs for insarmaps website.
         """
-        if self.insarmaps_flag:
-            minsar.ingest_insarmaps.main([self.custom_template_file, '--email'])
-        else:
-            print('insarmaps step is off (insarmaps_flag in template is False)')
+        minsar.ingest_insarmaps.main([self.custom_template_file, '--email'])
         return
 
     def run_image_products(self):
         """ create ortho/geo-rectified products.
         """
-        if self.image_products_flag == 'True':
-            minsar.export_ortho_geo.main([self.custom_template_file])
-        else:
-            print('imageProducts step is off (image_products_flag in template is False)')
+        minsar.export_ortho_geo.main([self.custom_template_file])
         return
 
     def run(self, steps=step_list):
