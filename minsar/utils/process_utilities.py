@@ -15,6 +15,7 @@ import argparse
 import numpy as np
 import h5py
 import math
+from pathlib import Path
 from natsort import natsorted
 import xml.etree.ElementTree as ET
 import shutil
@@ -90,7 +91,7 @@ def add_upload_data_products(parser):
     flag_parser.add_argument('--mintpyProducts',
                         dest='mintpy_products_flag',
                         action='store_true',
-                        default=False,
+                        default=True,
                         help='uploads mintpy data products to data portal')
     flag_parser.add_argument('--imageProducts',
                         dest='image_products_flag',
@@ -126,8 +127,8 @@ def add_execute_runfiles(parser):
                         help='stopping run file number.\n')
     run_parser.add_argument('--dostep', dest='step', type=int, metavar='STEP',
                       help='run processing at the # step only')
-    run_parser.add_argument('--numBursts', dest='num_bursts', metavar='number of bursts',
-                         help='walltime for submitting the script as a job')
+    run_parser.add_argument('--numBursts', dest='num_bursts', type=int, metavar='number of bursts',
+                         help='number of bursts to calculate walltime')
 
     return parser
 
@@ -468,7 +469,7 @@ def create_rerun_run_file(job_files):
 ##########################################################################
 
 
-def extract_attribute_from_hdf_file(file,attribute):
+def extract_attribute_from_hdf_file(file, attribute):
     """
     extract attribute from an HDF5 file
     :param file: hdf file name
@@ -584,6 +585,7 @@ def concatenate_error_files(run_file, work_dir):
         os.remove(out_file)
 
     out_name = os.path.dirname(run_file) + '/out_' + run_file.split('/')[-1] + '.e'
+    Path(out_name).touch()
     error_files = glob.glob(run_file + '*.e*')
     if not len(error_files) == 0:
         with open(out_name, 'w') as outfile:
@@ -595,8 +597,8 @@ def concatenate_error_files(run_file, work_dir):
                     outfile.write(infile.read())
                 os.remove(fname)
                 
-        shutil.copy(os.path.abspath(out_name), os.path.abspath(work_dir))
-        os.remove(os.path.abspath(out_name))
+    shutil.copy(os.path.abspath(out_name), os.path.abspath(work_dir))
+    os.remove(os.path.abspath(out_name))
 
     return None
 
@@ -614,7 +616,7 @@ def file_len(fname):
 def remove_zero_size_or_length_error_files(run_file):
     """Removes files with zero size or zero length (*.e files in run_files)."""
 
-    error_files = glob.glob(run_file + '*.e*')
+    error_files = glob.glob(run_file + '*.e*') + glob.glob(run_file + '*.o*')
     error_files = natsorted(error_files)
     for item in error_files:
         if os.path.getsize(item) == 0:       # remove zero-size files
@@ -651,7 +653,7 @@ def move_out_job_files_to_stdout(run_file):
     dir_name = os.path.dirname(run_file)
     out_folder = dir_name + '/stdout_' + os.path.basename(run_file)
     
-    if len(job_files) >= 2:
+    if len(stdout_files) >= 2:
         if not os.path.isdir(out_folder):
             os.mkdir(out_folder)
         else:
@@ -662,6 +664,10 @@ def move_out_job_files_to_stdout(run_file):
             shutil.move(item, out_folder)
         for item in job_files:
             shutil.move(item, out_folder)
+
+    extra_batch_files = glob.glob(run_file + '_*')
+    for item in extra_batch_files:
+        shutil.move(item, out_folder)
 
     return None
 
@@ -732,7 +738,7 @@ def get_number_of_bursts(inps_dict):
         topsStack_template = pathObj.correct_for_isce_naming_convention(inpd)
         command_options = []
         for item in topsStack_template:
-            if item == 'useGPU':
+            if item in ['useGPU', 'rmFilter']:
                 if topsStack_template[item] == 'True':
                     command_options = command_options + ['--' + item]
             elif not topsStack_template[item] is None:
@@ -777,7 +783,7 @@ def get_number_of_bursts(inps_dict):
 ############################################################################
 
 
-def walltime_adjust(number_of_bursts, default_time, scheduler='SLURM'):
+def walltime_adjust(number_of_bursts, default_time, scheduler='SLURM', adjust='True'):
     """ multiplys default walltime by number of bursts and returns adjusted walltime """
 
     try:
@@ -790,7 +796,8 @@ def walltime_adjust(number_of_bursts, default_time, scheduler='SLURM'):
                                       seconds=time_split.tm_sec).total_seconds()
 
     if not number_of_bursts in [None, 'None']:
-        time_seconds = time_seconds * number_of_bursts
+        if adjust == 'True':
+            time_seconds = time_seconds * number_of_bursts
 
     walltime_factor = float(os.getenv('WALLTIME_FACTOR'))
 
