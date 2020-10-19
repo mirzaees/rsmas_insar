@@ -69,8 +69,11 @@ def main(iargs=None):
    
     job_id_list = []
 
-    bursts = glob.glob(inps.work_dir + '/geom_master/*/hgt*rdr')
+    bursts = glob.glob(inps.work_dir + '/geom_reference/*/hgt*rdr')
     number_of_bursts = len(bursts)
+    
+    if len(bursts) == 0:
+        number_of_bursts = 1
 
     out_lines = []
     string = 'run_files_dir:  ' + run_files_dir
@@ -84,8 +87,15 @@ def main(iargs=None):
     reserved_time_list = []
     elapsed_time_list = []
 
-    if not (os.getenv('PLATFORM_NAME') == "STAMPEDE2"):
-       print('Not on stampede2 - return from summarize_job_run_times.py')
+    hostname = subprocess.Popen("hostname -f", shell=True, stdout=subprocess.PIPE).stdout.read().decode("utf-8")
+
+    scheduler = None
+    for platform in ['frontera', 'stampede2', 'comet']:
+        if platform in hostname:
+            scheduler = 'SLURM'
+            break
+    if not scheduler == 'SLURM':
+       print('Not on TACC system - return from summarize_job_run_times.py')
        return None
 
     for fname in run_stdout_files:
@@ -119,6 +129,11 @@ def main(iargs=None):
     total_time = putils.sum_time( [reserved_time_sum, elapsed_time_sum] )
 
     service_units =  calculate_service_units(num_nodes_list, elapsed_time_list)
+
+    if os.path.exists('run_files/rerun.log'):
+        file = open('run_files/rerun.log',mode='r')
+        rerun_log = file.read()
+        print('\n' + rerun_log); out_lines.append('\n' + rerun_log)
 
     string = '\nTotal reserved (pending), elapsed time: ' + reserved_time_sum +  ' ' + elapsed_time_sum
     print (string); out_lines.append(string)

@@ -47,12 +47,11 @@ def main(iargs=None):
             input_arguments.remove('--submit')
         command = [os.path.abspath(__file__)] + input_arguments
         job_obj.submit_script(job_name, job_file_name, command)
-        sys.exit(0)
 
     os.chdir(inps.work_dir)
 
-    hdfeos_file = glob.glob(inps.work_dir + '/mintpy/S1*.he5')
-    hdfeos_file.append(glob.glob(inps.work_dir +'/mintpy/SUBSET_*/S1*.he5'))
+    hdfeos_file = glob.glob(inps.work_dir + '/mintpy/*.he5')
+    hdfeos_file.append(glob.glob(inps.work_dir +'/mintpy/SUBSET_*/*.he5'))
     hdfeos_file = hdfeos_file[0]
 
     json_folder = inps.work_dir + '/mintpy/JSON'
@@ -65,40 +64,24 @@ def main(iargs=None):
     command2 = 'json_mbtiles2insarmaps.py -u ' + password.insaruser + ' -p ' + password.insarpass + ' --host ' + \
                'insarmaps.miami.edu -P rsmastest -U rsmas\@gmail.com --json_folder ' + \
                json_folder + ' --mbtiles_file ' + mbtiles_file 
-    command3 = 'upload_data_products.py --mintpyProducts ' + ' ' + inps.custom_template_file 
-    command4 = 'summarize_job_run_times.py ' + ' ' + inps.custom_template_file 
 
-    with open(inps.work_dir + '/run_ingest_insarmaps', 'w') as f:
+    with open(inps.work_dir + '/run_insarmaps', 'w') as f:
         f.write(command1 + '\n')
         f.write(command2 + '\n')
-        f.write(command3 + '\n')
-        f.write(command4 + '\n')
 
-    out_file = 'out_insarmaps'
+    out_file = 'out_ingest_insarmaps'
     message_rsmas.log(inps.work_dir, command1)
-    command1 = '('+command1+' | tee '+out_file+'.o) 3>&1 1>&2 2>&3 | tee '+out_file+'.e'
+    #command1 = '('+command1+' | tee '+out_file+'.o) 3>&1 1>&2 2>&3 | tee '+out_file+'.e'
     status = subprocess.Popen(command1, shell=True).wait()
     if status is not 0:
         raise Exception('ERROR in hdfeos5_2json_mbtiles.py')
 
     # TODO: Change subprocess call to get back error code and send error code to logger
     message_rsmas.log(inps.work_dir, command2)
-    command2 = '('+command2+' | tee -a '+out_file+'.o) 3>&1 1>&2 2>&3 | tee -a '+out_file+'.e'
+    #command2 = '('+command2+' | tee -a '+out_file+'.o) 3>&1 1>&2 2>&3 | tee -a '+out_file+'.e'
     status = subprocess.Popen(command2, shell=True).wait()
     if status is not 0:
         raise Exception('ERROR in json_mbtiles2insarmaps.py')
-
-    out_file = 'out_upload_data_products'
-    message_rsmas.log(inps.work_dir, command3)
-    command3 = '('+command3+' | tee -a '+out_file+'.o) 3>&1 1>&2 2>&3 | tee -a '+out_file+'.e'
-    status = subprocess.Popen(command3, shell=True).wait()
-    if status is not 0:
-        raise Exception('ERROR in upload_data_products.py')
-
-    message_rsmas.log(inps.work_dir, command4)
-    status = subprocess.Popen(command4, shell=True).wait()
-    if status is not 0:
-        raise Exception('ERROR in summarize_job_run_times_products.py')
 
     # Email insarmaps results:
     if inps.email:

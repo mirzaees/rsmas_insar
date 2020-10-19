@@ -7,12 +7,12 @@ ssaraopt.startDate                = 20160601
 ssaraopt.endDate                  = 20160831
 demMethod                         = ssara
 insarmaps_flag                    = True
-image_products_flag               = True
+image_products_flag               = False
 
 ######################################################
 
-topsStack.boundingBox             = -1 -0.6 -91.7 -90.9      # -1 0.15 -91.6 -90.9
-topsStack.boundingBox             = -0.81 -0.80 -90.9 -90.86    # -1 0.15 -91.6 -90.9
+topsStack.boundingBox             = -1 -0.6 -91.9 -90.7      # -1 0.15 -91.9 -90.6
+topsStack.boundingBox             = -0.81 -0.80 -90.9 -90.86    # -1 0.15 -91.9 -90.6
 topsStack.subswath                = 1    # '1 2'
 topsStack.numConnections          = 3    # comment
 topsStack.azimuthLooks            = 5    # comment
@@ -29,5 +29,5 @@ mintpy.troposphericDelay.method    = no    # pyaps  #[pyaps / height_correlation
 mintpy.save.hdfEos5                = yes   #[yes / update / no], auto for no, save timeseries to UNAVCO InSAR Archive format
 mintpy.save.hdfEos5.update         = yes   #[yes / no], auto for no, put XXXXXXXX as endDate in output filename
 mintpy.save.kmz                    = yes  #[yes / no], auto for yes, save geocoded velocity to Google Earth KMZ file
-
+mintpy.load.autoPath               = yes
 ######################################################

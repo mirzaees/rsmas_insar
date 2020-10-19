@@ -27,7 +27,9 @@ cd rsmas_insar
 
 git clone https://github.com/insarlab/MintPy.git sources/MintPy ;
 git clone https://github.com/isce-framework/isce2.git sources/isce2
+git clone https://github.com/geodesymiami/minopy.git sources/minopy 
 git clone https://github.com/geodesymiami/geodmod.git sources/geodmod ;
+git clone https://github.com/geodesymiami/insarmaps_scripts.git sources/insarmaps_scripts ;
 git clone https://github.com/bakerunavco/SSARA.git 3rdparty/SSARA ;
 git clone https://github.com/yunjunz/pyaps3.git 3rdparty/PyAPS/pyaps3 ;
 git clone https://github.com/geodesymiami/MimtPy.git sources/MimtPy ;
@@ -46,36 +48,37 @@ cd setup
 rm -rf ../3rdparty/miniconda3
 miniconda_version=Miniconda3-py37_4.8.2-MacOSX-x86_64.sh
 miniconda_version=Miniconda3-py37_4.8.2-Linux-x86_64.sh
-miniconda_version=Miniconda3-latest-MacOSX-x86_64.sh
-miniconda_version=Miniconda3-latest-Linux-x86_64.sh
+#miniconda_version=Miniconda3-latest-MacOSX-x86_64.sh    # python 3.8  - does not seem to work
+#miniconda_version=Miniconda3-latest-Linux-x86_64.sh
 wget http://repo.continuum.io/miniconda/$miniconda_version --no-check-certificate -O $miniconda_version #; if ($? != 0) exit; 
 chmod 755 $miniconda_version
 mkdir -p ../3rdparty
 ./$miniconda_version -b -p ../3rdparty/miniconda3
 ../3rdparty/miniconda3/bin/conda config --add channels conda-forge
-../3rdparty/miniconda3/bin/conda install isce2 -c conda-forge --yes
-
 ../3rdparty/miniconda3/bin/conda install --yes --file ../sources/MintPy/docs/conda.txt
+../3rdparty/miniconda3/bin/pip install git+https://github.com/tylere/pykml.git
+../3rdparty/miniconda3/bin/conda install isce2 -c conda-forge --yes
 ../3rdparty/miniconda3/bin/conda install --yes --file ../docs/conda.txt
 ../3rdparty/miniconda3/bin/pip install --upgrade pip
 ../3rdparty/miniconda3/bin/pip install geocoder
-../3rdparty/miniconda3/bin/pip install git+https://github.com/tylere/pykml.git
 ```
 * #Source the environment and create aux directories. Install credential files for data download:
 ```
+install_credential_files.csh;
+cp -p ../minsar/additions/isce/logging.conf ../3rdparty/miniconda3/lib/python3.*/site-packages/isce/defaults/logging/logging.conf
+
 source ~/accounts/platforms_defaults.bash;
 source environment.bash;
 mkdir -p $SENTINEL_ORBITS $SENTINEL_AUX $OPERATIONS/LOGS;
-$RSMASINSAR_HOME/setup/install_credential_files.csh;
+
 ```
 * #Adding HPC support for MintPy (parallel plotting and defaults to use dask Local Cluster) and uncommited isce fixes
 ```
 cp -p ../minsar/additions/mintpy/smallbaselineApp_auto.cfg ../sources/MintPy/mintpy/defaults/
 cp -p ../minsar/additions/mintpy/plot_smallbaselineApp.sh ../sources/MintPy/sh/
 
-cp -p ../minsar/additions/isce/logging.conf ../3rdparty/miniconda3/lib/python3.*/site-packages/isce/defaults/logging/logging.conf
-#cp -p ../minsar/additions/isce/logging.conf ../3rdparty/miniconda3/pkgs/isce2*/lib/python3.*/site-packages/isce/defaults/logging/logging.conf
 cp -p ../minsar/additions/isce/prepRawCSK.py ../sources/isce2/contrib/stack/stripmapStack
+cp -p ../minsar/additions/isce/invertMisreg.py ../sources/isce2/contrib/stack/stripmapStack
 ```
 
 ### Orbits and aux files

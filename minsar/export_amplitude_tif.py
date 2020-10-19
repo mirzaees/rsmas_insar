@@ -8,10 +8,10 @@ import sys
 import gdal
 import osr
 import glob
+import argparse
 from minsar.objects.auto_defaults import PathFind
 from minsar.utils.process_utilities import xmlread, cmd_line_parse
 from minsar.objects import message_rsmas
-import geocodeGdal as gg
 
 pathObj = PathFind()
 ########################################
@@ -28,7 +28,7 @@ def main(iargs=None):
 
     inps = cmd_line_parse(iargs, script='export_amplitude_tif')
 
-    slave_dir = os.path.join(inps.work_dir, pathObj.mergedslcdir)
+    secondary_dir = os.path.join(inps.work_dir, pathObj.mergedslcdir)
     pic_dir = os.path.join(inps.work_dir, pathObj.tiffdir)
 
     if not os.path.exists(pic_dir):
@@ -41,21 +41,21 @@ def main(iargs=None):
 
     message_rsmas.log(pic_dir, os.path.basename(__file__) + ' ' + ' '.join(input_arguments))
 
-    os.chdir(slave_dir)
+    os.chdir(secondary_dir)
 
     try:
-        os.system('rm '+ inps.prod_list + '/geo*')
+        os.system('rm '+ inps.input_file + '/geo*')
     except:
         print('geocoding ...')
 
-    slc = inps.prod_list
+    slc = inps.input_file
 
     if inps.im_type == 'ortho':
-        inps.geo_master_dir = os.path.join(inps.work_dir, pathObj.geomasterdir)
+        inps.geo_reference_dir = os.path.join(inps.work_dir, pathObj.georeferencedir)
     else:
-        inps.geo_master_dir = os.path.join(inps.work_dir, pathObj.geomlatlondir)
+        inps.geo_reference_dir = os.path.join(inps.work_dir, pathObj.geomlatlondir)
 
-    os.chdir(os.path.join(slave_dir, inps.prod_list))
+    os.chdir(os.path.join(secondary_dir, inps.input_file))
 
     geocode_file(inps)
 
@@ -76,7 +76,7 @@ def main(iargs=None):
     transform = data.GetGeoTransform()
 
     ##
-    xmlfile = glob.glob(os.path.join(inps.work_dir, pathObj.masterdir, '*.xml'))[0]
+    xmlfile = glob.glob(os.path.join(inps.work_dir, pathObj.referencedir, '*.xml'))[0]
     attributes = xmlread(xmlfile)
     Metadata = {'SAT': attributes['missionname'], 'Mode': attributes['passdirection'],
                 'Image_Type': '{}_BackScatter'.format(inps.im_type), 'Date': slc}
@@ -124,36 +124,47 @@ def geocode_file(inps):
     Geocodes the input file
     :param inps: input name space
     """
+    if 'stripmap' in inps.prefix:
+        sys.path.append(os.path.join(os.getenv('ISCE_STACK'), 'stripmapStack'))
+    else:
+        sys.path.append(os.path.join(os.getenv('ISCE_STACK'), 'topsStack'))
+
+    import geocodeGdal as gg
 
     inps.cropbox = [val for val in inps.cropbox.split()]
     if len(inps.cropbox) != 4:
         raise Exception('Bbox should contain 4 floating point values')
 
-    inps.lat_file = os.path.abspath(os.path.join(inps.geo_master_dir, inps.lat_file))
-    inps.lon_file = os.path.abspath(os.path.join(inps.geo_master_dir, inps.lon_file))
-    inps.prod_list = [inps.prod_list + '.slc.ml']
+    scp_arg = {'latFile': os.path.abspath(os.path.join(inps.geo_reference_dir, inps.lat_file)),
+                'lonFile': os.path.abspath(os.path.join(inps.geo_reference_dir, inps.lon_file)),
+                'xOff': 0,
+                'yOff': 0,
+                'prodlist': [inps.input_file + '.slc.ml'],
+                'resamplingMethod': 'near'}
+
+    scp_arg = argparse.Namespace(**scp_arg)
+    #scp_arg.prodlist = [inps.prod_list + '.slc.ml']
 
     WSEN = str(inps.cropbox[2]) + ' ' + str(inps.cropbox[0]) + ' ' + str(inps.cropbox[3]) + ' ' + str(inps.cropbox[1])
-    latFile, lonFile = gg.prepare_lat_lon(inps)
+    latFile, lonFile = gg.prepare_lat_lon(scp_arg)
 
     gg.getBound(latFile, float(inps.cropbox[0]), float(inps.cropbox[1]), 'lat')
     gg.getBound(lonFile, float(inps.cropbox[2]), float(inps.cropbox[3]), 'lon')
 
-    for infile in inps.prod_list:
-        infile = os.path.abspath(infile)
-        print('geocoding ' + infile)
-        outFile = os.path.join(os.path.dirname(infile), "geo_" + os.path.basename(infile))
-        gg.writeVRT(infile, latFile, lonFile)
+    infile = os.path.abspath(inps.input_file + '.slc.ml')
+    print('geocoding ' + infile)
+    outFile = os.path.join(os.path.dirname(infile), "geo_" + os.path.basename(infile))
+    gg.writeVRT(infile, latFile, lonFile)
 
-        cmd = 'gdalwarp -of ENVI -geoloc  -te ' + WSEN + ' -tr ' + str(inps.lat_step) + ' ' + \
-              str(inps.lon_step) + ' -srcnodata 0 -dstnodata 0 ' + ' -r ' + inps.resampling_method + \
-              ' -co INTERLEAVE=BIL ' + infile + '.vrt ' + outFile
-        print(cmd)
-        os.system(cmd)
+    cmd = 'gdalwarp -of ENVI -geoloc  -te ' + WSEN + ' -tr ' + str(inps.lat_step) + ' ' + \
+          str(inps.lon_step) + ' -srcnodata 0 -dstnodata 0 ' + ' -r ' + inps.resampling_method + \
+          ' -co INTERLEAVE=BIL ' + infile + '.vrt ' + outFile
+    print(cmd)
+    os.system(cmd)
 
-        # write_xml(outFile)
-        cmd = "gdal2isce_xml.py -i " + outFile
-        os.system(cmd)
+    # write_xml(outFile)
+    cmd = "gdal2isce_xml.py -i " + outFile
+    os.system(cmd)
 
     return
 
