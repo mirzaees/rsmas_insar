@@ -108,6 +108,7 @@ def main(iargs=None):
 
     # Writing job files
     if inps.write_jobs:
+        os.system('rm {}/*.job'.format(run_dir))
         for item in run_file_list:
             job_obj.write_batch_jobs(batch_file=item)
 
