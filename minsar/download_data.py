@@ -35,11 +35,12 @@ def main(iargs=None):
     if not inps.template[inps.prefix + 'Stack.slcDir'] is None:
         inps.download_dir = inps.template[inps.prefix + 'Stack.slcDir']
 
-    if 'COSMO' in inps.template['ssaraopt.platform']:
+    if any(word in inps.template['ssaraopt.platform'] for word in ['COSMO', 'CSK', 'csk']):
         inps.download_dir = os.path.join(inps.work_dir, 'RAW_data')
+        gep = True
     else:
         inps.download_dir = os.path.join(inps.work_dir, 'SLC')
-
+        gep = False
     #########################################
     # Submit job
     #########################################
@@ -57,7 +58,10 @@ def main(iargs=None):
         os.makedirs(inps.download_dir)
     os.chdir(inps.download_dir)
 
-    succesful = run_ssara(inps.download_dir, inps.custom_template_file, inps.delta_lat, logger)
+    if gep:
+        sucessful = run_gep(inps.custom_template_file)
+    else:
+        succesful = run_ssara(inps.download_dir, inps.custom_template_file, inps.delta_lat, logger)
 
     return None
 
@@ -90,6 +94,13 @@ def check_downloads(inps, run_number, args, logger):
 
     logger.log(loglevel.INFO, "Everything is there!")
 
+def run_gep(template):
+
+    gep_call = ['download_gep_csk.py '] + [template]
+    with open('../download_data_command.txt', 'w') as f:
+        f.write(' '.join(gep_call) + '\n')
+
+    return
 
 def run_ssara(download_dir, template, delta_lat, logger, run_number=1):
     """ Runs ssara_federated_query-cj.py and checks for download issues.
@@ -120,7 +131,7 @@ def run_ssara(download_dir, template, delta_lat, logger, run_number=1):
     #FA 9/20: I could not figure out how to get the string into a bash shell variable, that is why writing a file
     #print( ' '.join(ssara_call) )
 
-    with open('../ssara_command.txt', 'w') as f:
+    with open('../download_data_command.txt', 'w') as f:
         f.write(' '.join(ssara_call) + '\n')
 
     return 
