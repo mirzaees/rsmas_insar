@@ -121,9 +121,9 @@ elif [[ $startstep == "finishup" ]]; then
     timeseries_flag=0
     upload_flag=0
     insarmaps_flag=0
-elif [[ $startstep != "" ]]; then
-    echo "startstep received value of "${startstep}". Exiting."
-    exit 1
+#elif [[ $startstep != "" ]]; then
+#    echo "startstep received value of "${startstep}". Exiting."
+#    exit 1
 fi
 
 if [[ $stopstep == "download" ]]; then
@@ -161,9 +161,9 @@ elif [[ $stopstep == "upload" ]]; then
     finishup_flag=0
 elif [[ $stopstep == "insarmaps" ]]; then
     finishup_flag=0
-elif [[ $stopstep != "" ]]; then
-    echo "stopstep received value of "${stopstep}". Exiting."
-    exit 1
+#elif [[ $stopstep != "" ]]; then                                           ## Sara: I don't understand why?? I comment because
+#    echo "stopstep received value of "${stopstep}". Exiting."              ## it does not work if you run like: --dostep download
+#    exit 1
 fi
 
 ####################################
@@ -184,9 +184,9 @@ if [[ $download_flag == "1" ]]; then
        exit 1;
     fi
     cd $download_dir
-    cat ../ssara_command.txt
-    echo "Running.... 'cat ../ssara_command.txt'"
-    bash ../ssara_command.txt
+    cat ../download_data_command.txt
+    echo "Running.... 'cat ../download_data_command.txt'"
+    bash ../download_data_command.txt
     exit_status="$?"
     
     runs=1
