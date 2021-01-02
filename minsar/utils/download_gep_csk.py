@@ -7,15 +7,11 @@ import time
 import subprocess
 import datetime
 import argparse
-from minsar.objects.dataset_template import Template
 from minsar.objects.rsmas_logging import RsmasLogger, loglevel
 from minsar.objects import message_rsmas
 from minsar.utils import process_utilities as putils
-from minsar.objects.auto_defaults import PathFind
-from minsar.job_submission import JOB_SUBMIT
 import multiprocessing as mp
 
-pathObj = PathFind()
 
 def main(iargs=None):
 
@@ -31,27 +27,13 @@ def main(iargs=None):
     logfile_name = inps.work_dir + '/gep_download.log'
     logger = RsmasLogger(file_name=logfile_name)
 
-    if not inps.template['raw_image_dir'] is None:
+    if not inps.template['raw_image_dir'] in [None, 'None']:
         inps.slc_dir = inps.template['raw_image_dir']
     else:
-        inps.slc_dir = os.path.join(inps.work_dir, 'raw')
+        inps.slc_dir = os.path.join(inps.work_dir, 'RAW_data')
 
-    project_slc_dir = os.path.join(inps.work_dir, 'raw')
-    #########################################
-    # Submit job
-    #########################################
-    if inps.submit_flag:
-        job_file_name = 'download_gep_csk'
-        job_name = inps.custom_template_file.split(os.sep)[-1].split('.')[0]
-        job_obj = JOB_SUBMIT(inps)
-        if '--submit' in input_arguments:
-            input_arguments.remove('--submit')
-        command = [os.path.abspath(__file__)] + input_arguments
-        job_obj.submit_script(job_name, job_file_name, command)
-        sys.exit(0)
-
-    if not os.path.isdir(project_slc_dir):
-        os.makedirs(project_slc_dir)
+    project_slc_dir = os.path.join(inps.work_dir, 'RAW_data')
+    os.makedirs(project_slc_dir, exist_ok=True)
     os.chdir(inps.slc_dir)
 
     logger.log(loglevel.INFO, "DATASET: %s", str(inps.custom_template_file.split('/')[-1].split(".")[0]))
@@ -78,8 +60,8 @@ def main(iargs=None):
 
     command_get_list = 'curl -s "https://catalog.terradue.com/csk/search?format=atom&count=1000&bbox={bbox}" |\
      xmllint --format - | grep enclosure | sed "s/.*<link rel="enclosure".*href="\(.*\)"\/>/\1/g"'.format(bbox=bbox)
-
     print(command_get_list)
+
     data_list = subprocess.check_output(command_get_list, shell=True).decode('UTF-8') #os.system(command_get_list)
 
     data_list = data_list.split('/>\n')
@@ -87,13 +69,16 @@ def main(iargs=None):
 
     cmd_all = []
     for data in data_list:
-        date = datetime.datetime.strptime(data.split('.h5')[0].split('_')[-1][0:8],'%Y%m%d')
-        if date >= start_date and date <= end_date:
-            cmd = 'curl -u {username}:{password} -o $(basename ${enclosure}) {enclosure}'.format(username=user,
-                                                                                                 password=passwd,
-                                                                                                 enclosure=data)
-            cmd_all.append(cmd)
+        if len(data.split('/')[-1]) > 20:
+            date = datetime.datetime.strptime(data.split('/')[-1].split('_')[-1][0:8],'%Y%m%d')
+            swath = int(data.split('/')[-1].split('_')[-6])
+            if date >= start_date and date <= end_date and swath == int(inps.template['ssaraopt.relativeOrbit']):
+                cmd = 'curl -u {username}:{password} -o $(basename ${enclosure}) {enclosure}'.format(username=user,
+                                                                                                     password=passwd,
+                                                                                                     enclosure=data)
+                cmd_all.append(cmd)
 
+    print(cmd_all)
     pool = mp.Pool(6)
     pool.map(os.system, cmd_all)
     pool.close()
