@@ -76,7 +76,8 @@ set -- "${POSITIONAL[@]}" # restore positional parameters
 #find the last job (11 for 'geometry' and 16 for 'NESD')
 job_file_arr=(run_files/run_*_0.job)
 last_job_file=${job_file_arr[-1]}
-last_job_file_number=${last_job_file:14:2}
+last_job_file_number=$(echo ${last_job_file:14:2} | bc)
+
 
 if [[ $startstep == "ifgrams" ]]; then
     startstep=1
@@ -105,7 +106,6 @@ for (( i=$startstep; i<=$stopstep; i++ )) do
     fi
     globlist+=("$fname")
 done
-
 
 for g in "${globlist[@]}"; do
     files=($g)
