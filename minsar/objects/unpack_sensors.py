@@ -87,15 +87,21 @@ class Sensors:
             workdir = os.path.dirname(in_file)
             out_folder = os.path.basename(in_file).split('.')[0]
             out_folder = os.path.join(workdir, out_folder)
+            os.makedirs(out_folder, exist_ok=True)
 
             if os.path.isfile(in_file):
                 # unzip the file in the outfolder
-                successflag_unzip = self.uncompressfile(in_file, out_folder)
+                if 'tar' in in_file:
+                    cmd = 'tar -xf {} -C {}'.format(in_file, out_folder)
+                    os.system(cmd)
+                    successflag_unzip = True
+                else:
+                    successflag_unzip = self.uncompressfile(in_file, out_folder)
 
                 # put failed files in a seperate directory
                 if not successflag_unzip:
                     os.makedirs(os.path.join(workdir, 'FAILED_FILES'), exist_ok=True)
-                    os.rename(in_file, os.path.join(workdir, 'FAILED_FILES', '.'))
+                    os.system('mv {} {}'.format(in_file, os.path.join(workdir, 'FAILED_FILES')))
                 else:
                     # check if file needs to be removed or put in archive folder
                     if self.rmfile in [True, 'True']:
