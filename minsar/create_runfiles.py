@@ -109,6 +109,9 @@ def main(iargs=None):
     # Writing job files
     if inps.write_jobs:
         for item in run_file_list:
+            old_job = item + '.job'
+            if os.path.exists(old_job):
+                os.remove(old_job)
             job_obj.write_batch_jobs(batch_file=item)
 
         if inps.template['processingMethod'] == 'smallbaseline':
