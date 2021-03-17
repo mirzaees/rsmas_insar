@@ -25,6 +25,7 @@ launcher_multiTask_multiNode   ---> submit tasks of a batch file in one job with
 
 import os
 import sys
+import stat
 import subprocess
 import argparse
 import time
@@ -63,6 +64,7 @@ def create_argument_parser():
                        help="output directory for run files")
     group.add_argument('--numBursts', dest='num_bursts', type=int, metavar='number of bursts',
                             help='number of bursts to calculate walltime')
+    group.add_argument('--writeonly', dest='writeonly', action='store_true', help='Write job files without submitting')
     group.add_argument('--remora', dest='remora', action='store_true', help='use remora to get job information')
 
     return parser
@@ -109,7 +111,7 @@ class JOB_SUBMIT:
             self.prefix = 'tops'
 
         self.submission_scheme, self.platform_name, self.scheduler, self.queue_name, \
-        self.number_of_cores_per_node, self.number_of_threads_per_core, self.max_jobs_per_queue, \
+        self.number_of_cores_per_node, self.number_of_threads_per_core, self.max_jobs_per_workflow, \
         self.max_memory_per_node, self.wall_time_factor = set_job_queue_values(inps)
 
         if not 'num_bursts' in inps or not inps.num_bursts:
@@ -173,7 +175,7 @@ class JOB_SUBMIT:
 
         return
 
-    def write_batch_jobs(self, batch_file=None, email_notif=None):
+    def write_batch_jobs(self, batch_file=None, email_notif=None, distribute=None, num_cores_per_task=None):
         """
         creates jobs based on scheduler
         :param batch_file: batch job name
@@ -186,14 +188,23 @@ class JOB_SUBMIT:
         if not email_notif is None:
             self.email_notif = email_notif
 
-        message_rsmas.log(self.work_dir, 'job_submission.py {a} --outdir {b}'.format(a=batch_file, b=self.out_dir))
 
         self.job_files = []
 
         if self.platform_name in supported_platforms:
-            print('\nWorking on a {} machine ...\n'.format(self.scheduler))
+            #print('\nWorking on a {} machine ...\n'.format(self.scheduler))
 
             self.get_memory_walltime(batch_file, job_type='batch')
+
+            if self.prefix == 'tops':
+                message_rsmas.log(self.work_dir, 'job_submission.py --template {t} {a} --outdir {b} '
+                                                 '--numBursts {c} --writeonly'.format(t=self.custom_template_file,
+                                                                                      a=batch_file, b=self.out_dir,
+                                                                                      c=self.num_bursts))
+            else:
+                message_rsmas.log(self.work_dir, 'job_submission.py --template {t} {a} --outdir {b} '
+                                                 '--writeonly'.format(t=self.custom_template_file,
+                                                                      a=batch_file, b=self.out_dir))
 
             with open(batch_file, 'r') as f:
                 tasks = f.readlines()
@@ -202,9 +213,12 @@ class JOB_SUBMIT:
             number_of_nodes = np.int(np.ceil(number_of_tasks * float(self.default_num_threads) / (
                     self.number_of_cores_per_node * self.number_of_threads_per_core)))
 
+            if not num_cores_per_task is None:
+                self.number_of_parallel_tasks_per_node = self.number_of_cores_per_node // num_cores_per_task
+
             if 'singleTask' in self.submission_scheme:
 
-                self.write_batch_singletask_jobs(batch_file)
+                self.write_batch_singletask_jobs(batch_file, distribute=distribute)
 
             elif 'multiTask_multiNode' in self.submission_scheme: # or number_of_nodes == 1:
 
@@ -214,15 +228,14 @@ class JOB_SUBMIT:
                 job_file_lines = self.get_job_file_lines(batch_file, job_name, number_of_tasks=len(tasks),
                                                          number_of_nodes=number_of_nodes, work_dir=self.out_dir)
                 self.job_files.append(self.add_tasks_to_job_file_lines(job_file_lines, tasks,
-                                                                       batch_file=batch_file_name))
+                                                                       batch_file=batch_file_name,
+                                                                       number_of_nodes=number_of_nodes,
+                                                                       distribute=distribute))
 
             elif 'multiTask_singleNode' in self.submission_scheme:
 
-                self.split_jobs(batch_file, tasks, number_of_nodes)
-
-        if len(self.job_files) > 0:
-            for job_file in self.job_files:
-                os.system('chmod +x {}'.format(job_file))
+                self.split_jobs(batch_file, tasks, number_of_nodes, distribute=distribute,
+                                num_cores_per_task=num_cores_per_task)
 
         return
 
@@ -287,7 +300,7 @@ class JOB_SUBMIT:
 
         return job_number
 
-    def write_single_job_file(self, job_name, job_file_name, command_line, work_dir=None, number_of_nodes=1):
+    def write_single_job_file(self, job_name, job_file_name, command_line, work_dir=None, number_of_nodes=1, distribute=None):
         """
         Writes a job file for a single job.
         :param job_name: Name of job.
@@ -296,27 +309,31 @@ class JOB_SUBMIT:
         :param work_dir: working or output directory
         """
 
+        hostname = subprocess.Popen("hostname", shell=True, stdout=subprocess.PIPE).stdout.read().decode("utf-8")
+
         # get lines to write in job file
         job_file_lines = self.get_job_file_lines(job_name, job_file_name, work_dir=work_dir,
                                                  number_of_nodes=number_of_nodes)
-        job_file_lines.append("\nfree")
+        job_file_lines.append("\nfree\n")
+
+        if self.scheduler == 'SLURM':
+            job_file_lines = self.add_slurm_commands(job_file_lines, job_file_name, hostname, distribute = distribute)
+
         if self.remora:
             job_file_lines.append('\nmodule load remora')
             job_file_lines.append("\nremora " + command_line + "\n")
         else:
             job_file_lines.append("\n" + command_line + "\n")
 
+
         # write lines to .job file
         job_file_name = "{0}.job".format(job_file_name)
         with open(os.path.join(work_dir, job_file_name), "w+") as job_file:
             job_file.writelines(job_file_lines)
 
-        self.job_files.append(job_file_name)
-        os.system('chmod +x {}'.format(job_file_name))
-
         return
 
-    def write_batch_singletask_jobs(self, batch_file):
+    def write_batch_singletask_jobs(self, batch_file, distribute=None):
         """
         Iterates through jobs in input file and writes a job file for each job using the specified scheduler. This function
         is used for batch jobs in pegasus (LSF) to split the tasks into multiple jobs
@@ -328,7 +345,9 @@ class JOB_SUBMIT:
 
         for i, command_line in enumerate(job_list):
             job_file_name = os.path.abspath(batch_file).split(os.sep)[-1] + "_" + str(i)
-            self.write_single_job_file(job_file_name, job_file_name, command_line, work_dir=self.out_dir)
+            self.write_single_job_file(job_file_name, job_file_name, command_line, work_dir=os.path.dirname(batch_file), distribute=distribute)
+            job_file = os.path.dirname(batch_file) + '/' + job_file_name + '.job'
+            #self.write_single_job_file(job_file_name, job_file_name, command_line, work_dir=self.out_dir)
 
         return
 
@@ -422,7 +441,7 @@ class JOB_SUBMIT:
                     
         return
 
-    def split_jobs(self, batch_file, tasks, number_of_nodes):
+    def split_jobs(self, batch_file, tasks, number_of_nodes, distribute=None, num_cores_per_task=None):
         """
         splits the batch file tasks into multiple jobs with one node
         :param batch_file:
@@ -434,7 +453,11 @@ class JOB_SUBMIT:
         number_of_jobs = number_of_nodes
         number_of_nodes_per_job = 1
 
-        while number_of_jobs > int(self.max_jobs_per_queue):
+        max_jobs_per_workflow = self.max_jobs_per_workflow
+        if ( "generate_burst_igram" in batch_file or "merge_burst_igram" in batch_file) :
+            max_jobs_per_workflow = 100
+        #while number_of_jobs > int(self.max_jobs_per_workflow):
+        while number_of_jobs > int(max_jobs_per_workflow):
             number_of_nodes_per_job = number_of_nodes_per_job + 1
             number_of_jobs = np.ceil(number_of_nodes/number_of_nodes_per_job)
 
@@ -444,7 +467,8 @@ class JOB_SUBMIT:
         #    import pdb; pdb.set_trace()
 
         while number_of_limited_memory_tasks < number_of_parallel_tasks:
-            if number_of_jobs < int(self.max_jobs_per_queue):
+            #if number_of_jobs < int(self.max_jobs_per_workflow):
+            if number_of_jobs < int(max_jobs_per_workflow):
                 number_of_jobs += 1
                 number_of_parallel_tasks = int(np.ceil(len(tasks) / number_of_jobs))
             else:
@@ -454,8 +478,6 @@ class JOB_SUBMIT:
             number_of_nodes_per_job = number_of_nodes_per_job + 1
             number_of_limited_memory_tasks = int(self.max_memory_per_node * number_of_nodes_per_job / self.default_memory)
 
-        self.number_of_parallel_tasks_per_node = math.ceil(number_of_parallel_tasks / number_of_nodes_per_job)
-
         if number_of_nodes_per_job > 1:
             print('Note: Number of jobs exceed the numbers allowed per queue for jobs with 1 node...\n'
                   'Number of Nodes per job are adjusted to {}'.format(number_of_nodes_per_job))
@@ -463,6 +485,12 @@ class JOB_SUBMIT:
         start_lines = np.ogrid[0:len(tasks):number_of_parallel_tasks].tolist()
         end_lines = [x + number_of_parallel_tasks for x in start_lines]
         end_lines[-1] = len(tasks)
+
+        if not num_cores_per_task is None:
+            self.number_of_parallel_tasks_per_node = self.number_of_cores_per_node // num_cores_per_task
+        else:
+            self.number_of_parallel_tasks_per_node = math.ceil(number_of_parallel_tasks / number_of_nodes_per_job)
+
 
         for start_line, end_line in zip(start_lines, end_lines):
             job_count = start_lines.index(start_line)
@@ -473,7 +501,9 @@ class JOB_SUBMIT:
                                                      number_of_nodes=number_of_nodes_per_job, work_dir=self.out_dir)
 
             job_file_name = self.add_tasks_to_job_file_lines(job_file_lines, tasks[start_line:end_line],
-                                                             batch_file=batch_file_name)
+                                                             batch_file=batch_file_name,
+                                                             number_of_nodes=number_of_nodes_per_job,
+                                                             distribute=distribute)
 
             self.job_files.append(job_file_name)
 
@@ -550,8 +580,6 @@ class JOB_SUBMIT:
         :return: List of lines for job submission file
         """
 
-        number_of_tasks = number_of_nodes * self.number_of_cores_per_node
-
         # directives based on scheduler
         if self.scheduler == "LSF":
             number_of_tasks = number_of_nodes
@@ -579,8 +607,11 @@ class JOB_SUBMIT:
             queue_option = "-q {0}"
             walltime_limit_option = "-l walltime={0}"
             memory_option = "-l mem={0}"
-            email_option = "-m bea" + prefix + "-M {0}"
+            email_option = "-m a" + prefix + "-M {0}"
         elif self.scheduler == 'SLURM':
+
+            number_of_tasks = number_of_nodes * self.number_of_cores_per_node
+
             # if number_of_nodes > 1 and number_of_tasks == 1:
             #     number_of_tasks = number_of_nodes * self.number_of_cores_per_node
             prefix = "\n#SBATCH "
@@ -605,6 +636,7 @@ class JOB_SUBMIT:
             prefix + name_option.format(os.path.basename(job_name)),
             prefix + project_option.format(os.getenv('JOBSHEDULER_PROJECTNAME'))
         ]
+ 
         if self.email_notif:
             job_file_lines.append(prefix + email_option.format(os.getenv("NOTIFICATIONEMAIL")))
 
@@ -615,10 +647,11 @@ class JOB_SUBMIT:
             prefix + queue_option.format(self.queue),
             prefix + walltime_limit_option.format(self.default_wall_time),
         ])
-        if memory_option:
-            if not 'launcher' in self.submission_scheme:
-                job_file_lines.extend([prefix + memory_option.format(self.default_memory)], )
-            # job_file_lines.extend([prefix + memory_option.format(self.max_memory_per_node)], )
+        # FA 12/20: memory is not used in launcher under SLURM and jobs submit well under PBS
+        #if memory_option:
+        #    if not 'launcher' in self.submission_scheme:
+        #        job_file_lines.extend([prefix + memory_option.format(self.default_memory)], )
+        #    # job_file_lines.extend([prefix + memory_option.format(self.max_memory_per_node)], )
 
         if self.scheduler == "PBS":
             # export all local environment variables to job
@@ -629,7 +662,134 @@ class JOB_SUBMIT:
 
         return job_file_lines
 
-    def add_tasks_to_job_file_lines(self, job_file_lines, tasks, batch_file=None):
+    def add_slurm_commands(self, job_file_lines, job_file_name, hostname, batch_file=None, distribute=None):
+
+        job_file_lines.append("module load python_cacher \n")
+        job_file_lines.append("export PYTHON_IO_CACHE_CWD=0\n")
+        job_file_lines.append("module load ooops\n")
+
+        # for MiNoPy jobs
+        if not distribute is None:
+            # DO NOT LOAD 'intel/19.1.1' HERE
+            job_file_lines.append('distribute.bash ' + distribute)
+
+        # for ISCE run files
+        copy_reference_steps = ['average_baseline', 'fullBurst_geo2rdr', 'fullBurst_resample', 'unwrap']
+        copy_geom_reference_steps = ['fullBurst_geo2rdr']
+        copy_stack_steps = ['merge_reference_secondary_slc', 'merge_burst_igram']
+        copy_coreg_secondarys = ['generate_burst_igram']
+
+        copy_to_tmp_steps = copy_reference_steps + copy_geom_reference_steps + copy_stack_steps + copy_coreg_secondarys
+        if any(x in job_file_name for x in copy_to_tmp_steps):
+            job_file_lines.append('\n### copy infiles to local /tmp and adjust xml files ###\n')
+
+            if any(x in job_file_name for x in copy_reference_steps):
+                job_file_lines.append('cp -r ' + self.out_dir + '/reference /tmp\n')
+                job_file_lines.append('files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
+                job_file_lines.append('old=' + self.out_dir + '\n')
+                job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files\n')
+            if any(x in job_file_name for x in copy_geom_reference_steps):
+                job_file_lines.append('cp -r ' + self.out_dir + '/geom_reference /tmp\n')
+                job_file_lines.append('files="/tmp/geom_reference/*/*.xml"\n')
+                job_file_lines.append('old=' + self.out_dir + '\n')
+                job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files\n')
+            if any(x in job_file_name for x in copy_stack_steps):
+                job_file_lines.append('cp -r ' + self.out_dir + '/stack /tmp\n')
+                job_file_lines.append('files="/tmp/stack/*xml"\n')
+                job_file_lines.append('old=' + self.out_dir + '\n')
+                job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files\n')
+
+        if 'generate_burst_igram' in job_file_name and not batch_file is None:
+            # awk '{printf "%s\\n",$3}' run_08_generate_burst_igram | awk -F _ '{printf "%s\\n%s\\n",$4,$5}' | sort -n | uniq
+            # awk '{printf "%s\\n",$3}' run_09_merge_burst_igram_0 | awk -F _merge_igram_ '{printf "%s\\n",$2}' | sort -n | uniq
+            # awk '{printf "%s\\n",$3}' run_10_filter_coherence | awk -F _igram_filt_coh_ '{printf "%s\\n",$2}' | sort -n | uniq
+            # awk '{printf "%s\\n",$3}' run_10_filter_coherence | awk -F _ '{printf "%s\\n %s\\n",$5,$6}' | sort -n | uniq
+            # awk '{printf "%s\\n",$3}' run_11_unwrap | awk -F _igram_unw_ '{printf "%s\\n",$2}' | sort -n | uniq
+
+            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+                + """ | awk -F _ '{printf "%s\\n%s\\n",$4,$5}' | sort -n | uniq) )"""
+            job_file_lines.append(str + '\n')
+
+            job_file_lines.append('mkdir -p /tmp/coreg_secondarys\n')
+            job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
+            job_file_lines.append('    cp -r ' + self.out_dir + '/coreg_secondarys/' + '$date /tmp/coreg_secondarys\n')
+            job_file_lines.append('done\n\n')
+
+            job_file_lines.append('files1="/tmp/coreg_secondarys/????????/*.xml"\n')
+            job_file_lines.append('files2="/tmp/coreg_secondarys/????????/*/*.xml"\n')
+            job_file_lines.append('old=' + self.out_dir + '\n')
+            job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files1\n')
+            job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files2\n')
+
+            str = """ref_date=( $(xmllint --xpath 'string(/productmanager_name/component[@name="instance"]/property[@name="ascendingnodetime"]/value)' """ \
+                + self.out_dir + """/reference/IW*.xml | cut -d ' ' -f 1 | sed "s|-||g") )"""
+            job_file_lines.append('\n' + str + '\n')
+            job_file_lines.append('if [[ $date_list == *$ref_date* ]]; then\n')
+            job_file_lines.append('   cp -r ' + self.out_dir + '/reference /tmp\n')
+            job_file_lines.append('   files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
+            job_file_lines.append('   old=' + self.out_dir + '\n')
+            job_file_lines.append('   srun sed -i "s|$old|/tmp|g" $files\n')
+            job_file_lines.append('fi\n')
+
+        if 'merge_burst_igram' in job_file_name and not batch_file is None:
+            str = """pair_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+                + """ | awk -F _merge_igram_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
+            job_file_lines.append('\n' + str + '\n')
+            job_file_lines.append('mkdir -p /tmp/interferograms\n')
+            job_file_lines.append("""for pair in "${pair_list[@]}"; do\n""")
+            job_file_lines.append('   cp -r ' + self.out_dir + '/interferograms/' + '$pair /tmp/interferograms\n')
+            job_file_lines.append('done\n\n')
+
+            job_file_lines.append('files1="/tmp/interferograms/????????_????????/*.xml"\n')
+            job_file_lines.append('files2="/tmp/interferograms/????????_????????/*/*.xml"\n')
+            job_file_lines.append('old=' + self.out_dir + '\n')
+            job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files1\n')
+            job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files2\n')
+
+
+        if 'filter_coherence' in job_file_name and not batch_file is None:
+            str = """pair_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+                + """ | awk -F _igram_filt_coh_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
+            job_file_lines.append('\n' + str + '\n')
+            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+                + """ | awk -F _ '{printf "%s\\n%s\\n",$5,$6}' | sort -n | uniq) )"""
+            job_file_lines.append(str + '\n\n')
+
+            job_file_lines.append('mkdir -p /tmp/merged/interferograms\n\n')
+            job_file_lines.append("""for pair in "${pair_list[@]}"; do\n""")
+            job_file_lines.append('   cp -r ' + self.out_dir + '/merged/interferograms/' + '$pair /tmp/merged/interferograms\n')
+            job_file_lines.append('done\n\n')
+
+            job_file_lines.append('files1="/tmp/merged/interferograms/????????_????????/*.xml"\n')
+            job_file_lines.append('old=' + self.out_dir +'\n')
+            job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files1\n')
+
+            job_file_lines.append('mkdir -p /tmp/merged/SLC\n\n')
+            job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
+            job_file_lines.append('   cp -r ' + self.out_dir + '/merged/SLC/' + '$date /tmp/merged/SLC\n')
+            job_file_lines.append('done\n\n')
+
+            job_file_lines.append('files1="/tmp/merged/SLC/????????/*.xml"\n')
+            job_file_lines.append('old=' + self.out_dir + '\n')
+            job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files1\n')
+
+
+        if 'unwrap' in job_file_name and not batch_file is None:
+            str = """pair_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+                + """ | awk -F _igram_unw_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
+            job_file_lines.append('\n' + str + '\n')
+            job_file_lines.append('mkdir -p /tmp/merged/interferograms\n\n')
+            job_file_lines.append("""for pair in "${pair_list[@]}"; do\n""")
+            job_file_lines.append('   cp -r ' + self.out_dir + '/merged/interferograms/' + '$pair /tmp/merged/interferograms\n')
+            job_file_lines.append('done\n\n')
+  
+            job_file_lines.append('files1="/tmp/merged/interferograms/????????_????????/*.xml"\n')
+            job_file_lines.append('old=' + self.out_dir + '\n')
+            job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files1\n')
+
+        return job_file_lines
+
+    def add_tasks_to_job_file_lines(self, job_file_lines, tasks, batch_file=None, number_of_nodes=1, distribute=None):
         """
         complete job file lines based on job submission scheme. if it uses launcher, add launcher specific lines
         :param job_file_lines: raw job file lines from function 'get_job_file_lines'
@@ -672,12 +832,12 @@ class JOB_SUBMIT:
             job_file_lines.append("\nexport PATH={0}:$PATH".format(self.stack_path))
             job_file_lines.append("\nexport LAUNCHER_WORKDIR={0}".format(self.out_dir))
             job_file_lines.append("\nexport LAUNCHER_PPN={0}\n".format(self.number_of_parallel_tasks_per_node))
+            job_file_lines.append("\nexport LAUNCHER_NHOSTS={0}\n".format(number_of_nodes))
             job_file_lines.append("\nexport LAUNCHER_JOB_FILE={0}\n".format(batch_file))
            
-            #if self.scheduler == 'SLURM':
-
-               #job_file_lines.append("module load python_cacher \n")
-               #job_file_lines.append("export LD_PRELOAD=/home1/apps/tacc-patches/python_cacher/myopen.so\n")
+            if self.scheduler == 'SLURM':
+               job_file_lines = self.add_slurm_commands(job_file_lines, job_file_name, hostname,
+                                                        batch_file=batch_file, distribute=distribute)
 
             if self.remora:
                 job_file_lines.append("\nremora $LAUNCHER_DIR/paramrun\n")
@@ -759,11 +919,12 @@ def set_job_queue_values(args):
     elif os.getenv('QUEUENAME'):
         template['QUEUENAME'] = os.getenv('QUEUENAME')
 
-    template['WALLTIME_FACTOR'] = os.getenv('WALLTIME_FACTOR')
+    #template['WALLTIME_FACTOR'] = os.getenv('WALLTIME_FACTOR')
 
     check_auto = {'queue_name': template['QUEUENAME'],
-                  'number_of_cores_per_node': template['JOB_CPUS_PER_NODE'],
+                  'number_of_cores_per_node': template['CPUS_PER_NODE'],
                   'number_of_threads_per_core': template['THREADS_PER_CORE'],
+                  'max_jobs_per_workflow': template['MAX_JOBS_PER_WORKFLOW'],
                   'max_jobs_per_queue': template['MAX_JOBS_PER_QUEUE'],
                   'wall_time_factor': template['WALLTIME_FACTOR'],
                   'max_memory_per_node': template['MEM_PER_NODE']}
@@ -786,29 +947,34 @@ def set_job_queue_values(args):
             if not line.startswith('#') and line.startswith(platform_name):
                 split_values = line.split()
                 default_queue = split_values[queue_header.index('QUEUENAME')]
-                if check_auto['queue_name'] == 'auto':
+                if check_auto['queue_name'] in ['auto', 'NONE', 'None']:
                     check_auto['queue_name'] = default_queue
                 if default_queue == check_auto['queue_name']:
                     if check_auto['number_of_cores_per_node'] == 'auto':
-                        check_auto['number_of_cores_per_node'] = int(split_values[queue_header.index('JOB_CPUS_PER_NODE')])
+                        check_auto['number_of_cores_per_node'] = int(split_values[queue_header.index('CPUS_PER_NODE')])
                     if check_auto['number_of_threads_per_core'] == 'auto':
                         check_auto['number_of_threads_per_core'] = int(split_values[queue_header.index('THREADS_PER_CORE')])
                     if check_auto['max_jobs_per_queue'] == 'auto':
                         check_auto['max_jobs_per_queue'] = int(split_values[queue_header.index('MAX_JOBS_PER_QUEUE')])
+                    if check_auto['max_jobs_per_workflow'] == 'auto':
+                        check_auto['max_jobs_per_workflow'] = int(split_values[queue_header.index('MAX_JOBS_PER_WORKFLOW')])
                     if check_auto['max_memory_per_node'] == 'auto':
                         check_auto['max_memory_per_node'] = int(split_values[queue_header.index('MEM_PER_NODE')])
                     if check_auto['wall_time_factor'] == 'auto':
                         check_auto['wall_time_factor'] = float(split_values[queue_header.index('WALLTIME_FACTOR')])
 
                     break
-                else:
-                    continue
+                #else:
+                #    if default_queue == 'None':
+                #        continue
+                #    else:
+                #        break
 
     if platform_name in ['stampede2', 'frontera', 'comet']:
         scheduler = 'SLURM'
     elif platform_name in ['pegasus']:
         scheduler = 'LSF'
-    elif platform_name in ['eos_sanghoon', 'beijing_server', 'deqing_server']:
+    elif platform_name in ['eos_sanghoon', 'beijing_server', 'deqing_server', 'eos', 'dqcentos7insar']:
         scheduler = 'PBS'
     else:
         scheduler = None
@@ -821,7 +987,7 @@ def set_job_queue_values(args):
             i += 1
 
     out_puts = (submission_scheme, platform_name, scheduler, check_auto['queue_name'], check_auto['number_of_cores_per_node'],
-                check_auto['number_of_threads_per_core'], check_auto['max_jobs_per_queue'],
+                check_auto['number_of_threads_per_core'], check_auto['max_jobs_per_workflow'],
                 check_auto['max_memory_per_node'], check_auto['wall_time_factor'])
 
     return out_puts
@@ -829,10 +995,10 @@ def set_job_queue_values(args):
 
 def auto_template_not_existing_options(args):
 
-    job_options = ['QUEUENAME', 'JOB_CPUS_PER_NODE', 'THREADS_PER_CORE', 'MAX_JOBS_PER_QUEUE',
+    job_options = ['QUEUENAME', 'CPUS_PER_NODE', 'THREADS_PER_CORE', 'MAX_JOBS_PER_WORKFLOW', 'MAX_JOBS_PER_QUEUE',
                    'WALLTIME_FACTOR', 'MEM_PER_NODE', 'job_submission_scheme']
 
-    if 'custom_template_file' in args:
+    if hasattr(args, 'custom_template_file'):
         from minsar.objects.dataset_template import Template
         template = Template(args.custom_template_file).options
 
@@ -854,4 +1020,5 @@ if __name__ == "__main__":
 
     job_obj = JOB_SUBMIT(PARAMS)
     job_obj.write_batch_jobs()
-    status = job_obj.submit_batch_jobs()
+    if PARAMS.writeonly is False:
+        status = job_obj.submit_batch_jobs()

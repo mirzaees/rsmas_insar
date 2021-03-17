@@ -85,7 +85,9 @@ upload_flag=1
 insarmaps_flag=1
 finishup_flag=1
 
-if [[ $startstep == "dem" ]]; then
+if [[ $startstep == "download" ]]; then
+    download_flag=1
+elif [[ $startstep == "dem" ]]; then
     download_flag=0
     dem_flag=1
 elif [[ $startstep == "jobfiles" ]]; then
@@ -167,21 +169,42 @@ elif [[ $stopstep != "" ]]; then
 fi
 
 ####################################
+download_dir=$WORK_DIR/SLC
+
+platform_str=$(grep platform $template_file | cut -d'=' -f2)
+if [[ $platform_str == *"COSMO-SKYMED"* ]]; then
+   download_dir=$WORK_DIR/RAW_data
+fi
+echo download_dir: $download_dir
+####################################
 if [[ $download_flag == "1" ]]; then
-    echo "Running.... download_ssara.py $template_file"
-    download_ssara.py $template_file
+    echo "Running.... download_data.py $template_file"
+    download_data.py $template_file
     exit_status="$?"
     if [[ $exit_status -ne 0 ]]; then
-       echo "download_ssara.py exited with a non-zero exit code ($exit_status). Exiting."
+       echo "download_data.py exited with a non-zero exit code ($exit_status). Exiting."
        exit 1;
     fi
-    cd SLC
+    cd $download_dir
     cat ../ssara_command.txt
     echo "Running.... 'cat ../ssara_command.txt'"
     bash ../ssara_command.txt
     exit_status="$?"
-    if [[ $exit_status -ne 0 ]]; then
-       echo "ssara_federated_query.bash exited with a non-zero exit code ($exit_status). Exiting."
+    
+    runs=1
+    while [ $exit_status -ne 0 ] && [ $runs -le 4 ]; do
+        echo "ssara_federated_query.bash exited with a non-zero exit code ($exit_status). Trying again in 5 hours."
+        echo "$(date +"%Y%m%d:%H-%m") * Something went wrong. Exit code was ${exit_status}. Trying again in 5 hours" >> /log
+        echo "$(date +"%Y%m%d:%H-%m") * Something went wrong. Exit code was ${exit_status}. Trying again in 5 hours" >> ../log
+
+        sleep 180 # sleep for 5 hours
+        bash ../ssara_command.txt
+        exit_status="$?"
+        runs=$((runs+1))
+    done
+
+    if [[ $runs -gt 4 ]]; then
+       echo "ssara_federated_query.bash failed after 20 hours. Exiting."
        cd ..
        exit 1;
     fi
@@ -200,7 +223,7 @@ if [[ $dem_flag == "1" ]]; then
 fi
 
 if [[ $jobfiles_flag == "1" ]]; then
-    cmd="create_runfiles.py $template_file --jobfiles"
+    cmd="create_runfiles.py $template_file --jobfiles --queue $QUEUENAME"
     echo "Running.... $cmd >create_jobfiles.e 1>out_create_jobfiles.o"
     $cmd 2>create_jobfiles.e 1>out_create_jobfiles.o
     exit_status="$?"
@@ -208,6 +231,61 @@ if [[ $jobfiles_flag == "1" ]]; then
        echo "create_jobfile.py exited with a non-zero exit code ($exit_status). Exiting."
        exit 1;
     fi
+    
+    # modify config files to use /tmp on compute node 
+    files="configs/config_baseline_* configs/*_fullBurst_geo2rdr_* configs/*_fullBurst_resample_* configs/config_igram_unw_*"
+    old="reference : $PWD"
+    new="reference : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    old="geom_referenceDir : $PWD"
+    new="geom_referenceDir : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    files="configs/config_merge_* configs/*merge_igram*"
+    old="stack : $PWD"
+    new="stack : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    files="configs/config_generate_igram_*"
+    old="reference : $PWD"
+    new="reference : /tmp"
+    sed -i "s|$old|$new|g" $files
+    old="secondary : $PWD"
+    new="secondary : /tmp"
+    sed -i "s|$old|$new|g" $files
+    old="reference : $PWD"
+    new="reference : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    files="configs/config_merge_igram_*"
+    old="inp_reference : $PWD"
+    new="inp_reference : /tmp"
+    sed -i "s|$old|$new|g" $files
+    old="dirname : $PWD"
+    new="dirname : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    files="configs/config_igram_filt_coh_*"
+    old="input : $PWD"
+    new="input : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    #old="slc1 : $PWD/merged/SLC"
+    #new="slc1 : /tmp"
+    #sed -i "s|$old|$new|g" $files
+    #old="slc2 : $PWD/merged/SLC"
+    #new="slc2 : /tmp"
+    #sed -i "s|$old|$new|g" $files
+
+    files="configs/config_igram_unw_*"
+    old="ifg : $PWD"
+    new="ifg : /tmp"
+    sed -i "s|$old|$new|g" $files
+    old="coh : $PWD"
+    new="coh : /tmp"
+    sed -i "s|$old|$new|g" $files
+
 fi
 
 if [[ $ifgrams_flag == "1" ]]; then
@@ -276,7 +354,7 @@ if [[ $finishup_flag == "1" ]]; then
        exit 1;
     fi
     IFS=","
-    last_file=($(tail -1 $WORK_DIR/SLC/ssara_listing.txt))
+    last_file=($(tail -1 $download_dir/ssara_listing.txt))
     last_date=${last_file[3]}
     echo "Last file: $last_file"
     echo "Last processed image date: $last_date"

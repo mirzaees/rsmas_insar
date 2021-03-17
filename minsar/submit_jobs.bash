@@ -1,6 +1,32 @@
 ##! /bin/bash
-#set -x
-#trap read debug
+
+function abbreviate {
+    abb=$1
+    if [[ "${#abb}" -gt $2 ]]; then
+        abb=$(echo "$(echo $(basename $abb) | cut -c -$3)...$(echo $(basename $abb) | rev | cut -c -$4 | rev)")
+    fi
+    echo $abb
+}
+
+function remove_from_list {
+    var=$1
+    shift
+    list=("$@")
+    new_list=() # Not strictly necessary, but added for clarity
+    
+    #echo "VAR: $var"
+    for item in ${list[@]}
+    do
+        #echo "$item"
+        if [ "$item" != "$var" ]
+        then
+            new_list+=("$item")
+        fi
+    done
+    list=("${new_list[@]}")
+    unset new_list
+    echo "${list[@]}"
+}
 
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then
 helptext="                                                                         \n\
@@ -38,6 +64,7 @@ RUNFILES_DIR=$WORKDIR"/run_files"
 
 cd $WORKDIR
 
+randomorder=false
 startstep=1
 stopstep="insarmaps"
 
@@ -54,15 +81,19 @@ do
             shift # past argument
             shift # past value
             ;;
-	--stop)
+        --stop)
+                stopstep="$2"
+                shift
+                shift
+                ;;
+        --dostep)
+            startstep="$2"
             stopstep="$2"
             shift
             shift
             ;;
-	--dostep)
-            startstep="$2"
-            stopstep="$2"
-            shift
+        --random)
+            randomorder=true
             shift
             ;;
         *)
@@ -73,133 +104,168 @@ esac
 done
 set -- "${POSITIONAL[@]}" # restore positional parameters
 
+step_max_tasks_unit=500
+total_max_tasks=1000
+# IO load for each step. For step_io_load=1 the maximum tasks allowed is step_max_tasks_unit
+# for step_io_load=2 the maximum tasks allowed is step_max_tasks_unit/2
+declare -A  step_io_load_list
+step_io_load_list=(
+    [unpack_topo_reference]=1
+    [unpack_secondary_slc]=1
+    [average_baseline]=1
+    [extract_burst_overlaps]=1
+    [overlap_geo2rdr]=1
+    [overlap_resample]=1
+    [pairs_misreg]=1
+    [timeseries_misreg]=1
+    [fullBurst_geo2rdr]=1
+    [fullBurst_resample]=1
+    [extract_stack_valid_region]=1
+    [merge_reference_secondary_slc]=1
+    [generate_burst_igram]=1
+    [merge_burst_igram]=1
+    [filter_coherence]=1
+    [unwrap]=1
+
+    [smallbaseline_wrapper]=1
+    [insarmaps]=1
+)
+
+
+
+
+#find the last job (11 for 'geometry' and 16 for 'NESD')
+job_file_arr=(run_files/run_*_0.job)
+last_job_file=${job_file_arr[-1]}
+last_job_file_number=${last_job_file:14:2}
+
 if [[ $startstep == "ifgrams" ]]; then
     startstep=1
 elif [[ $startstep == "timeseries" ]]; then
-    startstep=17
+    startstep=$((last_job_file_number+1))
 elif [[ $startstep == "insarmaps" ]]; then
-    startstep=18
+    startstep=$((last_job_file_number+2))
 fi
 
 if [[ $stopstep == "ifgrams" ]]; then
-    stopstep=16
+    stopstep=$last_job_file_number
 elif [[ $stopstep == "timeseries" ]]; then
-    stopstep=17
+    stopstep=$((last_job_file_number+1))
 elif [[ $stopstep == "insarmaps" ]]; then
-    stopstep=18
+    stopstep=$((last_job_file_number+2))
 fi
 
 for (( i=$startstep; i<=$stopstep; i++ )) do
     stepnum="$(printf "%02d" ${i})"
-    if [[ $i -le 16 ]]; then
-	fname="$RUNFILES_DIR/run_${stepnum}_*.job"
-    elif [[ $i -eq 17 ]]; then
-	fname="$WORKDIR/smallbaseline_wrapper*.job"
+    if [[ $i -le $last_job_file_number ]]; then
+	    fname="$RUNFILES_DIR/run_${stepnum}_*.job"
+    elif [[ $i -eq $((last_job_file_number+1)) ]]; then
+	    fname="$WORKDIR/smallbaseline_wrapper.job"
     else
-	fname="$WORKDIR/insarmaps*.job"
+	    fname="$WORKDIR/insarmaps.job"
     fi
     globlist+=("$fname")
 done
 
 
 for g in "${globlist[@]}"; do
-    files=($g)
-    echo "Jobfiles to run: ${files[@]}"
-    
-    # Submit all of the jobs and record all of their job numbers
+    files=($(ls -1v $g ))
+    if $randomorder; then
+        files=( $(echo "${files[@]}" | sed -r 's/(.[^;]*;)/ \1 /g' | tr " " "\n" | shuf | tr -d " " ) )
+    fi
+
+    echo "Jobfiles to run:"
+    printf "%s\n" "${files[@]}"
+
     jobnumbers=()
-    for (( f=0; f < "${#files[@]}"; f++ )); do
-	file=${files[$f]}
-	active_jobs=($(squeue -u $USER | grep -oP "[0-9]{7,}"))
-	num_active_jobs=${#active_jobs[@]}
-	if [[ $num_active_jobs -lt 25 ]]; then
-             jobnumline=$(sbatch $file | grep "Submitted batch job")
-             jobnumber=$(grep -oE "[0-9]{7}" <<< $jobnumline)
+    file_pattern=$(echo "${files[0]}" | grep -oP "(.*)(?=_\d{1,}.job)|insarmaps|smallbaseline_wrapper")
+    step_name=$(echo $file_pattern | grep -oP "(?<=run_\d{2}_)(.*)|insarmaps|smallbaseline_wrapper")
 
-             jobnumbers+=("$jobnumber")
-        else
-             echo "Couldnt submit job (${file}), because there are 25 active jobs right now. Waiting 5 minutes to submit next job."
-             f=$((f-1))
-             sleep 300 # sleep for 5 minutes
-        fi
-    done
+    step_max_tasks=$(echo "$step_max_tasks_unit/${step_io_load_list[$step_name]}" | bc | awk '{print int($1)}')
 
+    sbc_command="sbatch_conditional.bash $file_pattern --step_name $step_name --step_max_tasks $step_max_tasks --total_max_tasks $total_max_tasks"
+    if $randomorder; then
+        sbc_command="$sbc_command --random"
+        echo "Jobs are being submitted in random order. Submission order is likely different from the order above."
+    fi
+    jns=$($sbc_command)
+
+    exit_status="$?"
+    if [[ $exit_status -eq 0 ]]; then
+	    jobnumbers=($jns)
+    fi
+
+    unset IFS
     echo "Jobs submitted: ${jobnumbers[@]}"
     sleep 5
+
     # Wait for each job to complete
-    for (( j=0; j < "${#jobnumbers[@]}"; j++)); do
-        jobnumber=${jobnumbers[$j]}
+    num_jobs=${#jobnumbers[@]}
+    num_complete=0
+    num_running=0
+    num_pending=0
+
+    while [[ $num_complete -lt $num_jobs ]]; do
+        num_complete=0
+        num_running=0
+        num_pending=0
+        sleep 30
+        for (( j=0; j < "${#jobnumbers[@]}"; j++)); do
+            file=${files[$j]}
+            file_pattern="${file%.*}"
+            step_name=$(echo $file_pattern | grep -oP "(?<=run_\d{2}_)(.*)(?=_\d{1,})|insarmaps|smallbaseline_wrapper")
+            step_name_long=$(echo $file_pattern | grep -oP "(?<=run_files\/)(.*)(?=_\d{1,})|insarmaps|smallbaseline_wrapper")
+            jobnumber=${jobnumbers[$j]}
+            state=$(sacct --format="State" -j $jobnumber | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -3 | tail -1 )
+
+            if [[ $state == *"COMPLETED"* ]]; then
+                num_complete=$(($num_complete+1))
+            elif [[ $state == *"RUNNING"* ]]; then
+                num_running=$(($num_running+1))
+            elif [[ $state == *"PENDING"* ]]; then
+                num_pending=$(($num_pending+1))
+            elif [[ $state == *"TIMEOUT"* ]]; then
+                num_timeout=$(($num_timeout+1))
+                step_max_tasks=$(echo "$step_max_tasks_unit/${step_io_load_list[$step_name]}" | bc | awk '{print int($1)}')
         
-        # Parse out the state of the job from the sacct function.
-        # Format state to be all uppercase (PENDING, RUNNING, or COMPLETED)
-        # and remove leading whitespace characters.
-        state=$(sacct --format="State" -j $jobnumber | grep "\w[[:upper:]]\w")
-        state="$(echo -e "${state}" | sed -e 's/^[[:space:]]*//')"
-
-        # Keep checking the state while it is not "COMPLETED"
-            secs=0
-        while true; do
-            
-            # Only print every so often, not every 10 seconds
-            if [[ $(( $secs % 10)) -eq 0 ]]; then
-                echo "Job ${jobnumber} is not finished yet. Current state is '${state}'"
-            fi
-
-            state=$(sacct --format="State" -j $jobnumber | grep "\w[[:upper:]]\w")
-            state="$(echo -e "${state}" | sed -e 's/^[[:space:]]*//')"
-
-                # Check if "COMPLETED" is anywhere in the state string variables.
-                # This gets rid of some strange special character issues.
-            if [[ $state == *"COMPLETED"* ]] && [[ $state != "" ]]; then
-                state="COMPLETED"
-                echo "${jobnumber} is complete"
-                break;
-
-            elif [[ $state == *"TIMEOUT"* ]] && [[ $state != "" ]]; then
-                jf=${files[$j]}
-		init_walltime=$(grep -oP '(?<=#SBATCH -t )[0-9]+:[0-9]+:[0-9]+' $jf)
-		
-		echo "${jobnumber} timedout due to too low a walltime (${init_walltime})."
-                		
+                init_walltime=$(grep -oP '(?<=#SBATCH -t )[0-9]+:[0-9]+:[0-9]+' $file)
+                echo "Timedout with walltime of ${init_walltime}."
+                                
                 # Compute a new walltime and update the job file
-                update_walltime.py "$jf" &> /dev/null
+                update_walltime.py "$file" &> /dev/null
+                updated_walltime=$(grep -oP '(?<=#SBATCH -t )[0-9]+:[0-9]+:[0-9]+' $file)
 
-		updated_walltime=$(grep -oP '(?<=#SBATCH -t )[0-9]+:[0-9]+:[0-9]+' $jf)
+                datetime=$(date +"%Y-%m-%d:%H-%M")
+                echo "${datetime}: re-running: ${file}: ${init_walltime} --> ${updated_walltime}" >> "${RUNFILES_DIR}"/rerun.log
+                echo "Resubmitting file (${file}) with new walltime of ${updated_walltime}"
 
-		datetime=$(date +"%Y-%m-%d:%H-%M")
-		echo "${datetime}: re-running: ${jf}: ${init_walltime} --> ${updated_walltime}" >> "${RUNFILES_DIR}"/rerun.log
+                jobnumbers=($(remove_from_list $jobnumber "${jobnumbers[@]}"))
+                files=($(remove_from_list $jf "${files[@]}"))
 
-		echo "Resubmitting file (${jf}) with new walltime of ${updated_walltime}"
+                # Resubmit as a new job number
+                jobnumber=$(sbatch_conditional.bash $file_pattern --step_name $step_name --step_max_tasks $step_max_tasks --total_max_tasks $total_max_tasks 2> /dev/null) 
 
-                # Resubmite a sa new job number
-                jobnumline=$(sbatch $jf | grep "Submitted batch job")
                 exit_status="$?"
-                echo "exit status from resubmitting job: $exit_status"
-                jn=$(grep -oE "[0-9]{7}" <<< $jobnumline)
-                echo "${jf} resubmitted as jobumber: ${jn}"
-
-                # Added newly submitted jobs and files to arrays
-                jobnumbers+=("$jn")
-                files+=("$jf")
-                break;
-        
-            elif [[ ( $state == *"FAILED"* ) &&  $state != "" ]]; then
-                echo "${jobnumber} FAILED. Exiting with status code 1."
+                if [[ $exit_status -eq 0 ]]; then
+                    jobnumbers+=("$jobnumber")
+                    files+=("$file")
+                    j=$(($j-1))
+                    echo "Resubmitted as jobumber: ${jobnumber}."
+                else
+                    echo "Error on resubmit for $jobnumber. Exiting."
+                    exit 1
+                fi
+            elif [[ ( $state == *"FAILED"* || $state ==  *"CANCELLED"* ) ]]; then
+                echo "Job failed. Exiting."
                 exit 1; 
-            elif [[ ( $state ==  *"CANCELLED"* ) &&  $state != "" ]]; then
-                echo "${jobnumber} was CANCELLED. Exiting with status code 1."
-                exit 1; 
+            else
+                continue;
             fi
 
-            # Wait for 30 second before chcking again
-            sleep 30
-            ((secs=secs+30))
-            
-            done
-
-        echo Job"${jobnumber} is finished."
-
+        done
+        printf "%-15s: %-7s; %-12s, %-10s, %-10s.\n" "$step_name_long" "$num_jobs jobs" "$num_complete COMPLETED" "$num_running RUNNING" "$num_pending PENDING"
     done
+
 
     # Run check_job_output.py on all files
     cmd="check_job_outputs.py  ${files[@]}"
@@ -210,4 +276,5 @@ for g in "${globlist[@]}"; do
             echo "Error in submit_jobs.bash: check_job_outputs.py exited with code ($exit_status)."
             exit 1
        fi
+    echo
 done
