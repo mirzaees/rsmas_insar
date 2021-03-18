@@ -457,9 +457,10 @@ class JOB_SUBMIT:
         if ( "generate_burst_igram" in batch_file or "merge_burst_igram" in batch_file) :
             max_jobs_per_workflow = 100
         #while number_of_jobs > int(self.max_jobs_per_workflow):
-        while number_of_jobs > int(max_jobs_per_workflow):
-            number_of_nodes_per_job = number_of_nodes_per_job + 1
-            number_of_jobs = np.ceil(number_of_nodes/number_of_nodes_per_job)
+        # Sara: Comment to force one node
+        #while number_of_jobs > int(max_jobs_per_workflow):
+        #    number_of_nodes_per_job = number_of_nodes_per_job + 1
+        #    number_of_jobs = np.ceil(number_of_nodes/number_of_nodes_per_job)
 
         number_of_parallel_tasks = int(np.ceil(len(tasks) / number_of_jobs))
         number_of_limited_memory_tasks = int(self.max_memory_per_node*number_of_nodes_per_job/self.default_memory)
