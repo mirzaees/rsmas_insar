@@ -6,7 +6,7 @@ import isce
 import isceobj
 import sys
 import glob
-import gdal
+from osgeo import gdal
 import time
 from minsar.objects import message_rsmas
 from isceobj.Planet.Planet import Planet

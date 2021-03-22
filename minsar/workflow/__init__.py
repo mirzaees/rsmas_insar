@@ -22,7 +22,7 @@ sg_logger.setLevel(logging.WARNING)
 # expose the following modules
 __all__ = [
     'dem_rsmas',
-    'download_rsmas',
+    'download_data',
     'create_runfiles',
     'email_results',
     'execute_runfiles',

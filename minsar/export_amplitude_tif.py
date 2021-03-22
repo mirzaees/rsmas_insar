@@ -5,7 +5,7 @@
 import numpy as np
 import os
 import sys
-import gdal
+from osgeo import gdal
 import osr
 import glob
 import argparse
