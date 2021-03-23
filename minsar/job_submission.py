@@ -25,7 +25,6 @@ launcher_multiTask_multiNode   ---> submit tasks of a batch file in one job with
 
 import os
 import sys
-import stat
 import subprocess
 import argparse
 import time
@@ -829,8 +828,10 @@ class JOB_SUBMIT:
             #else:
             #    job_file_lines.append("\n\nmodule load launcher")
 
+            job_file_lines.append("\nexport module load tacc-singularity")
+            job_file_lines.append("\ncp $SCRATCH/$MGEOLAB /tmp")
             job_file_lines.append("\nexport OMP_NUM_THREADS={0}".format(self.default_num_threads))
-            job_file_lines.append("\nexport PATH={0}:$PATH".format(self.stack_path))
+            job_file_lines.append("\nexport SINGULARITYENV_PREPEND_PATH={0}:$PATH".format(self.stack_path))
             job_file_lines.append("\nexport LAUNCHER_WORKDIR={0}".format(self.out_dir))
             job_file_lines.append("\nexport LAUNCHER_PPN={0}\n".format(self.number_of_parallel_tasks_per_node))
             job_file_lines.append("\nexport LAUNCHER_NHOSTS={0}\n".format(number_of_nodes))
