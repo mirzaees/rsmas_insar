@@ -828,8 +828,8 @@ class JOB_SUBMIT:
             #else:
             #    job_file_lines.append("\n\nmodule load launcher")
 
-            job_file_lines.append("\nexport module load tacc-singularity")
-            job_file_lines.append("\ncp $SCRATCH/$MGEOLAB /tmp")
+            #job_file_lines.append("\nmodule load tacc-singularity")
+            #job_file_lines.append("\ncp $SCRATCH/$MGEOLAB /tmp\n")
             job_file_lines.append("\nexport OMP_NUM_THREADS={0}".format(self.default_num_threads))
             job_file_lines.append("\nexport SINGULARITYENV_PREPEND_PATH={0}:$PATH".format(self.stack_path))
             job_file_lines.append("\nexport LAUNCHER_WORKDIR={0}".format(self.out_dir))
