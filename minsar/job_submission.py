@@ -29,14 +29,15 @@ import subprocess
 import argparse
 import time
 import glob
-import numpy as np
+import numpy as np   #
 import math
-from minsar.objects import message_rsmas
-from minsar.objects.auto_defaults import queue_config_file, supported_platforms
+#from minsar.objects import message_rsmas  #
+from minsar.objects.auto_defaults import queue_config_file, supported_platforms #
 import warnings
-import minsar.utils.process_utilities as putils
+import minsar.utils.process_utilities as putils #
 from datetime import datetime
 import re
+import inspect
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -196,12 +197,12 @@ class JOB_SUBMIT:
             self.get_memory_walltime(batch_file, job_type='batch')
 
             if self.prefix == 'tops':
-                message_rsmas.log(self.work_dir, 'job_submission.py --template {t} {a} --outdir {b} '
+                mlog(self.work_dir, 'job_submission.py --template {t} {a} --outdir {b} '
                                                  '--numBursts {c} --writeonly'.format(t=self.custom_template_file,
                                                                                       a=batch_file, b=self.out_dir,
                                                                                       c=self.num_bursts))
             else:
-                message_rsmas.log(self.work_dir, 'job_submission.py --template {t} {a} --outdir {b} '
+                mlog(self.work_dir, 'job_submission.py --template {t} {a} --outdir {b} '
                                                  '--writeonly'.format(t=self.custom_template_file,
                                                                       a=batch_file, b=self.out_dir))
 
@@ -451,23 +452,20 @@ class JOB_SUBMIT:
 
         number_of_jobs = number_of_nodes
         number_of_nodes_per_job = 1
-
         max_jobs_per_workflow = self.max_jobs_per_workflow
+
         if ( "generate_burst_igram" in batch_file or "merge_burst_igram" in batch_file) :
             max_jobs_per_workflow = 100
-        #while number_of_jobs > int(self.max_jobs_per_workflow):
-        # Sara: Comment to force one node
-        #while number_of_jobs > int(max_jobs_per_workflow):
-        #    number_of_nodes_per_job = number_of_nodes_per_job + 1
-        #    number_of_jobs = np.ceil(number_of_nodes/number_of_nodes_per_job)
+
+        if not self.submission_scheme.endswith('singleNode'):
+            while number_of_jobs > int(max_jobs_per_workflow):
+                number_of_nodes_per_job = number_of_nodes_per_job + 1
+                number_of_jobs = np.ceil(number_of_nodes/number_of_nodes_per_job)
 
         number_of_parallel_tasks = int(np.ceil(len(tasks) / number_of_jobs))
         number_of_limited_memory_tasks = int(self.max_memory_per_node*number_of_nodes_per_job/self.default_memory)
-        #if ( "run_15_filter_coherence" in batch_file) :
-        #    import pdb; pdb.set_trace()
 
         while number_of_limited_memory_tasks < number_of_parallel_tasks:
-            #if number_of_jobs < int(self.max_jobs_per_workflow):
             if number_of_jobs < int(max_jobs_per_workflow):
                 number_of_jobs += 1
                 number_of_parallel_tasks = int(np.ceil(len(tasks) / number_of_jobs))
@@ -1016,7 +1014,18 @@ def auto_template_not_existing_options(args):
 
 ###################################################################################################
 
+def mlog(logdir, msg):
+    f = open(os.path.join(logdir, 'log'), 'a')
+    callingFunction  = os.path.basename(inspect.stack()[1][1])
+    dateStr=datetime.strftime(datetime.now(), '%Y%m%d:%H%M%S')
+    #dateStr=datetime.datetime.now()
+    string = dateStr + " * " + msg
+    print(string)
+    f.write(string + "\n")
+    f.close()
+    return
 
+#######################
 if __name__ == "__main__":
     PARAMS = parse_arguments(sys.argv[1::])
 

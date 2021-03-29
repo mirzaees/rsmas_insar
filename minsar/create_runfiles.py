@@ -94,7 +94,7 @@ def main(iargs=None):
     inps.Stack_template = pathObj.correct_for_isce_naming_convention(inps)
     runObj = CreateRun(inps)
     runObj.run_stack_workflow()
-
+    
     run_file_list = putils.make_run_list(inps.work_dir)
 
     with open(inps.work_dir + '/run_files_list', 'w') as run_file:

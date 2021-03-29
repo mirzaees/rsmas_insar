@@ -31,7 +31,6 @@ def main(iargs=None):
     logfile_name = inps.work_dir + '/ssara_rsmas.log'
     logger = RsmasLogger(file_name=logfile_name)
 
-    #import pdb; pdb.set_trace()
     if not inps.template[inps.prefix + 'Stack.slcDir'] is None:
         inps.download_dir = inps.template[inps.prefix + 'Stack.slcDir']
 
