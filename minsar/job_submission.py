@@ -160,9 +160,9 @@ class JOB_SUBMIT:
 
         if not email_notif is None:
             self.email_notif = email_notif
-
-        command_line = os.path.basename(argv[0]) + " "
-        command_line += " ".join(flag for flag in argv[1:] if flag != "--submit")
+        
+        command_line_0 = "\nunset LD_PRELOAD\n" 
+        command_line = command_line_0 + " ".join(flag for flag in argv[:] if flag != "--submit")
 
         self.get_memory_walltime(job_file_name, job_type='script')
 
