@@ -838,7 +838,8 @@ class JOB_SUBMIT:
             if self.scheduler == 'SLURM':
                job_file_lines = self.add_slurm_commands(job_file_lines, job_file_name, hostname,
                                                         batch_file=batch_file, distribute=distribute)
-
+            
+            job_file_lines.append("\nunset LD_PRELOAD\n")
             if self.remora:
                 job_file_lines.append("\nremora $LAUNCHER_DIR/paramrun\n")
                 job_file_lines.append("\nmv remora_$SLURM_JOB_ID remora_" + os.path.basename(batch_file) + "_$SLURM_JOB_ID\n")

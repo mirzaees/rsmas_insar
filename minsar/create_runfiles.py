@@ -60,7 +60,7 @@ def main(iargs=None):
 
     inps.text_cmd = inps.template[inps.prefix + 'Stack.textCmd']
     if inps.text_cmd is None:
-        inps.text_cmd = ''
+        inps.text_cmd = ""
 
     if int(get_size(slc_dir)/1024**2) < 500:   # calculate slc_dir size in MB and see if there are SLCs according to size
 
@@ -121,17 +121,17 @@ def main(iargs=None):
         if inps.template['processingMethod'] == 'smallbaseline':
             job_name = 'smallbaseline_wrapper'
             job_file_name = job_name
-            command = [inps.text_cmd + 'smallbaselineApp.py', inps.custom_template_file, '--dir', 'mintpy']
+            command = [inps.text_cmd.split(), 'smallbaselineApp.py', inps.custom_template_file, '--dir', 'mintpy']
             job_obj.submit_script(job_name, job_file_name, command, writeOnly='True')
         else:
             job_name = 'minopy_wrapper'
             job_file_name = job_name
-            command = [inps.text_cmd + 'minopyApp.py', inps.custom_template_file, '--dir', 'minopy']
+            command = [inps.text_cmd.split(), 'minopyApp.py', inps.custom_template_file, '--dir', 'minopy']
             job_obj.submit_script(job_name, job_file_name, command, writeOnly='True')
 
         job_name = 'insarmaps'
         job_file_name = job_name
-        command = [inps.text_cmd + 'ingest_insarmaps.py', inps.custom_template_file]
+        command = [inps.text_cmd.split(), 'ingest_insarmaps.py', inps.custom_template_file]
         job_obj.submit_script(job_name, job_file_name, command, writeOnly='True')
 
     return None
