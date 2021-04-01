@@ -31,16 +31,18 @@ import time
 import glob
 import numpy as np   #
 import math
-#from minsar.objects import message_rsmas  #
-from minsar.objects.auto_defaults import queue_config_file, supported_platforms #
+#from minsar.objects.auto_defaults import supported_platforms,  queue_config_file as queue_default
 import warnings
-import minsar.utils.process_utilities as putils #
+import minsar.utils.process_utilities as putils
 from datetime import datetime
 import re
 import inspect
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+queue_default = os.path.join(os.getenv('RSMASINSAR_HOME'), 'minsar/defaults/queues.cfg')
+supported_platforms = ['frontera', 'stampede2', 'comet', 'pegasus', 'eos_sanghoon', 'eos', 'eos\n',
+                       'beijing_server', 'deqing_server', 'dqcentos7insar']
 
 def create_argument_parser():
     """
@@ -109,6 +111,12 @@ class JOB_SUBMIT:
         else:
             self.stack_path = os.path.join(os.getenv('ISCE_STACK'), 'topsStack')
             self.prefix = 'tops'
+
+        inps.queue_config_file = os.path.join(self.work_dir, os.path.basename(queue_default))
+        #self.job_defaults_file =
+        if not os.path.exists(inps.queue_config_file):
+            os.system('cp {} {}'.format(queue_default, self.work_dir))
+
 
         self.submission_scheme, self.platform_name, self.scheduler, self.queue_name, \
         self.number_of_cores_per_node, self.number_of_threads_per_core, self.max_jobs_per_workflow, \
@@ -513,7 +521,7 @@ class JOB_SUBMIT:
         :param job_name: the job file name
         :param job_type: 'batch' or 'script'
         """
-        config = putils.get_config_defaults(config_file='job_defaults.cfg')
+        config = putils.get_config_defaults(config_file='job_defaults.cfg', cdir=self.work_dir)
 
         if job_type == 'batch':
             step_name = '_'
@@ -698,13 +706,13 @@ class JOB_SUBMIT:
                 job_file_lines.append('srun sed -i "s|$old|/tmp|g" $files\n')
 
         if 'generate_burst_igram' in job_file_name and not batch_file is None:
-            # awk '{printf "%s\\n",$3}' run_08_generate_burst_igram | awk -F _ '{printf "%s\\n%s\\n",$4,$5}' | sort -n | uniq
-            # awk '{printf "%s\\n",$3}' run_09_merge_burst_igram_0 | awk -F _merge_igram_ '{printf "%s\\n",$2}' | sort -n | uniq
-            # awk '{printf "%s\\n",$3}' run_10_filter_coherence | awk -F _igram_filt_coh_ '{printf "%s\\n",$2}' | sort -n | uniq
-            # awk '{printf "%s\\n",$3}' run_10_filter_coherence | awk -F _ '{printf "%s\\n %s\\n",$5,$6}' | sort -n | uniq
-            # awk '{printf "%s\\n",$3}' run_11_unwrap | awk -F _igram_unw_ '{printf "%s\\n",$2}' | sort -n | uniq
+            # awk '{printf "%s\\n",$6}' run_08_generate_burst_igram | awk -F _ '{printf "%s\\n%s\\n",$4,$5}' | sort -n | uniq
+            # awk '{printf "%s\\n",$6}' run_09_merge_burst_igram_0 | awk -F _merge_igram_ '{printf "%s\\n",$2}' | sort -n | uniq
+            # awk '{printf "%s\\n",$6}' run_10_filter_coherence | awk -F _igram_filt_coh_ '{printf "%s\\n",$2}' | sort -n | uniq
+            # awk '{printf "%s\\n",$6}' run_10_filter_coherence | awk -F _ '{printf "%s\\n %s\\n",$5,$6}' | sort -n | uniq
+            # awk '{printf "%s\\n",$6}' run_11_unwrap | awk -F _igram_unw_ '{printf "%s\\n",$2}' | sort -n | uniq
 
-            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _ '{printf "%s\\n%s\\n",$4,$5}' | sort -n | uniq) )"""
             job_file_lines.append(str + '\n')
 
@@ -730,7 +738,7 @@ class JOB_SUBMIT:
             job_file_lines.append('fi\n')
 
         if 'merge_burst_igram' in job_file_name and not batch_file is None:
-            str = """pair_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _merge_igram_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
             job_file_lines.append('\n' + str + '\n')
             job_file_lines.append('mkdir -p /tmp/interferograms\n')
@@ -746,10 +754,10 @@ class JOB_SUBMIT:
 
 
         if 'filter_coherence' in job_file_name and not batch_file is None:
-            str = """pair_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _igram_filt_coh_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
             job_file_lines.append('\n' + str + '\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _ '{printf "%s\\n%s\\n",$5,$6}' | sort -n | uniq) )"""
             job_file_lines.append(str + '\n\n')
 
@@ -773,7 +781,7 @@ class JOB_SUBMIT:
 
 
         if 'unwrap' in job_file_name and not batch_file is None:
-            str = """pair_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _igram_unw_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
             job_file_lines.append('\n' + str + '\n')
             job_file_lines.append('mkdir -p /tmp/merged/interferograms\n\n')
@@ -938,7 +946,7 @@ def set_job_queue_values(args):
                 check_auto[key] = int(check_auto[key])
 
     if platform_name in supported_platforms:
-        with open(queue_config_file, 'r') as f:
+        with open(args.queue_config_file, 'r') as f:
             lines = f.readlines()
         for line in lines:
             if line.startswith('PLATFORM_NAME'):
