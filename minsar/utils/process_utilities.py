@@ -467,9 +467,9 @@ def get_config_defaults(config_file='job_defaults.cfg', cdir=None):
         config_file = os.path.join(config_dir, config_file)
     else:
         config_dir = cdir
-        config_file = os.path.join(config_dir, config_file)
-        if not os.path.exists(config_file):
+        if not os.path.exists(os.path.join(config_dir, config_file)):
             os.system('cp {} {}'.format(os.path.join(pathObj.defaultdir, config_file), cdir))
+        config_file = os.path.join(config_dir, config_file)
 
     if not os.path.isfile(config_file):
         raise ValueError('job config file NOT found, it should be: {}'.format(config_file))
