@@ -10,7 +10,7 @@ import shutil
 
 
 class Sensors:
-    def __init__(self, input_dir, output_dir, remove_file='False', multiple_raw_frame='False'):
+    def __init__(self, input_dir, output_dir, remove_file='False', multiple_raw_frame='False', text_cmd=None):
         self.system_path = os.getenv('PATH')
         sys.path.append(os.path.join(os.getenv('ISCE_STACK'), 'stripmapStack'))
         from uncompressFile import uncompressfile
@@ -21,6 +21,7 @@ class Sensors:
         self.rmfile = remove_file
         self.sensor = None
         self.sensor_str = None
+        self.text_cmd = text_cmd
 
         if multiple_raw_frame == 'True':
             self.data_type = 'raw'
@@ -296,6 +297,8 @@ class Sensors:
                 slcDir = os.path.join(self.output_dir, acquisitionDate)
                 os.makedirs(slcDir, exist_ok=True)
                 cmd = unpack_script + ' -i ' + os.path.abspath(dateDir) + ' -o ' + slcDir
+                if not self.text_cmd is None:
+                    cmd = '{} '.format(self.text_cmd) + cmd
                 print(cmd)
                 f.write(cmd + '\n')
         return run_unPack

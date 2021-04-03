@@ -72,7 +72,8 @@ def main(iargs=None):
 
         if os.path.exists(raw_image_dir):
             unpackObj = Sensors(raw_image_dir, slc_dir, remove_file='False',
-                                multiple_raw_frame=inps.template['multiple_raw_frame'])
+                                multiple_raw_frame=inps.template['multiple_raw_frame'],
+                                text_cmd=inps.template[inps.prefix + 'Stack.textCmd'])
             unpack_run_file = unpackObj.start()
             unpackObj.close()
 
