@@ -298,7 +298,7 @@ class Sensors:
                 os.makedirs(slcDir, exist_ok=True)
                 cmd = unpack_script + ' -i ' + os.path.abspath(dateDir) + ' -o ' + slcDir
                 if not self.text_cmd is None:
-                    cmd = '{} '.format(self.text_cmd) + cmd
+                    cmd = '{} {}'.format(self.text_cmd.strip('"'), cmd)
                 print(cmd)
                 f.write(cmd + '\n')
         return run_unPack
