@@ -465,10 +465,14 @@ class JOB_SUBMIT:
         if ( "generate_burst_igram" in batch_file or "merge_burst_igram" in batch_file) :
             max_jobs_per_workflow = 100
 
-        if not self.submission_scheme.endswith('singleNode'):
-            while number_of_jobs > int(max_jobs_per_workflow):
-                number_of_nodes_per_job = number_of_nodes_per_job + 1
-                number_of_jobs = np.ceil(number_of_nodes/number_of_nodes_per_job)
+        # FA 4/2021: we should remove all jobs_per_workflow restrictions as this is done by submit_jobs.bash
+        if 'singleNode' in self.submission_scheme:
+           max_jobs_per_workflow = 1000
+        #while number_of_jobs > int(self.max_jobs_per_workflow):
+        while number_of_jobs > int(max_jobs_per_workflow):
+            number_of_nodes_per_job = number_of_nodes_per_job + 1
+            number_of_jobs = np.ceil(number_of_nodes/number_of_nodes_per_job)
+
 
         number_of_parallel_tasks = int(np.ceil(len(tasks) / number_of_jobs))
         number_of_limited_memory_tasks = int(self.max_memory_per_node*number_of_nodes_per_job/self.default_memory)
@@ -670,6 +674,7 @@ class JOB_SUBMIT:
 
     def add_slurm_commands(self, job_file_lines, job_file_name, hostname, batch_file=None, distribute=None):
 
+        '''
         job_file_lines.append("\n" )
         job_file_lines.append( "################################################\n" )
         job_file_lines.append( "#   install code on /tmp                       #\n" )
@@ -679,17 +684,18 @@ class JOB_SUBMIT:
         job_file_lines.append( "mkdir -p /tmp/rsmas_insar\n" )
         job_file_lines.append( "cp -r $RSMASINSAR_HOME/minsar /tmp/rsmas_insar\n" )
         job_file_lines.append( "cp -r $RSMASINSAR_HOME/setup  /tmp/rsmas_insar\n" )
+        job_file_lines.append( "mkdir -p /tmp/rsmas_insar/3rdparty ;\n" )
 
         if "smallbaseline_wrapper" in job_file_name or "insarmaps" in job_file_name:
             job_file_lines.append( "mkdir -p /tmp/rsmas_insar/sources\n" )
             job_file_lines.append( "cp -r $RSMASINSAR_HOME/sources/MintPy /tmp/rsmas_insar/sources\n" )
-            job_file_lines.append( "cp -r $RSMASINSAR_HOME/3rdparty/PyAPS /tmp/rsmas_insar/3rparty\n" )
+            job_file_lines.append( "cp -r $RSMASINSAR_HOME/3rdparty/PyAPS /tmp/rsmas_insar/3rdparty\n" )
             job_file_lines.append( "cp -r $RSMASINSAR_HOME/sources/insarmaps_scripts /tmp/rsmas_insar/sources\n" )
 
-        job_file_lines.append( "mkdir -p /tmp/rsmas_insar/3rdparty ;\n" )
         job_file_lines.append( "cp -r $RSMASINSAR_HOME/3rdparty/launcher /tmp/rsmas_insar/3rdparty \n" )
         job_file_lines.append( "cp $SCRATCH/miniconda3.tar /tmp\n" )
         job_file_lines.append( "tar xf /tmp/miniconda3.tar -C /tmp/rsmas_insar/3rdparty\n" )
+        job_file_lines.append( "rm /tmp/miniconda3.tar\n" )
 
         job_file_lines.append( "# set environment    \n" )
         job_file_lines.append( "export RSMASINSAR_HOME=/tmp/rsmas_insar\n" )
@@ -697,9 +703,12 @@ class JOB_SUBMIT:
         job_file_lines.append( '# remove /scratch and /work from PATH\n' )
         job_file_lines.append( """export PATH=`echo ${PATH} | awk -v RS=: -v ORS=: '/scratch/ {next} {print}' | sed 's/:*$//'` \n""" )
         job_file_lines.append( """export PATH=`echo ${PATH} | awk -v RS=: -v ORS=: '/work/ {next} {print}' | sed 's/:*$//'` \n""" )
+        job_file_lines.append( """export PATH=`echo ${PATH} | awk -v RS=: -v ORS=: '/home/ {next} {print}' | sed 's/:*$//'` \n""" )
         job_file_lines.append( """export PYTHONPATH=`echo ${PYTHONPATH} | awk -v RS=: -v ORS=: '/scratch/ {next} {print}' | sed 's/:*$//'` \n""" )
+        job_file_lines.append( """export PYTHONPATH=`echo ${PYTHONPATH} | awk -v RS=: -v ORS=: '/home/ {next} {print}' | sed 's/:*$//'` \n""" )
         job_file_lines.append( """export PYTHONPATH_RSMAS=`echo ${PYTHONPATH_RSMAS} | awk -v RS=: -v ORS=: '/scratch/ {next} {print}' | sed 's/:*$//'` \n""" )
-
+        job_file_lines.append( """export PYTHONPATH_RSMAS=`echo ${PYTHONPATH_RSMAS} | awk -v RS=: -v ORS=: '/home/ {next} {print}' | sed 's/:*$//'` \n""" )
+        '''
         if not 'unpack_topo_reference' in job_file_name and not 'unpack_secondary_slc' in job_file_name:
             job_file_lines.append( "################################################\n" )
             job_file_lines.append( "# copy infiles to local /tmp and adjust *.xml  #\n" )
@@ -714,7 +723,7 @@ class JOB_SUBMIT:
             job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
             # secondarys
             job_file_lines.append('# secondarys\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _ '{printf "%s\\n",$3}' ) )"""
             job_file_lines.append(str + '\n')
             job_file_lines.append('mkdir -p /tmp/secondarys\n')
@@ -743,7 +752,7 @@ class JOB_SUBMIT:
             job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
             # secondarys
             job_file_lines.append('# secondarys\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _ '{printf "%s\\n",$4}' ) )"""
             job_file_lines.append(str + '\n')
             job_file_lines.append('mkdir -p /tmp/secondarys\n')
@@ -766,7 +775,7 @@ class JOB_SUBMIT:
             job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
             # secondarys
             job_file_lines.append('# secondarys\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _ '{printf "%s\\n",$4}' ) )"""
             job_file_lines.append(str + '\n')
             job_file_lines.append('mkdir -p /tmp/secondarys\n')
@@ -795,10 +804,16 @@ class JOB_SUBMIT:
             job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
             # coreg_secondarys      (different awk)
             job_file_lines.append('# coreg_secondarys (different awk)\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _ '{printf "%s\\n",$3}' | sed -n '/^[0-9]/p' ) )"""
             job_file_lines.append(str + '\n')
-            job_file_lines.append('mkdir -p /tmp/coreg_secondarys\n')
+            str = """ref_date=( $(xmllint --xpath 'string(/productmanager_name/component[@name="instance"]/property[@name="ascendingnodetime"]/value)' """ \
+                + self.out_dir + """/reference/IW*.xml | cut -d ' ' -f 1 | sed "s|-||g") )"""
+            job_file_lines.append(str + '\n')
+            job_file_lines.append("""# remove ref_date from array\n""")
+            job_file_lines.append("""index=$(echo ${date_list[@]/$ref_date//} | cut -d/ -f1 | wc -w | tr -d ' ')\n""")
+            job_file_lines.append("""unset date_list[$index]\n""")
+            job_file_lines.append("""mkdir -p /tmp/coreg_secondarys\n""")
             job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
             job_file_lines.append('    cp -r ' + self.out_dir + '/coreg_secondarys/' + '$date /tmp/coreg_secondarys\n')
             job_file_lines.append('done\n')
@@ -839,7 +854,7 @@ class JOB_SUBMIT:
             str = """ref_date=( $(xmllint --xpath 'string(/productmanager_name/component[@name="instance"]/property[@name="ascendingnodetime"]/value)' """ \
                 + self.out_dir + """/reference/IW*.xml | cut -d ' ' -f 1 | sed "s|-||g") )"""
             job_file_lines.append( str + '\n')
-            job_file_lines.append('if [[ $date_list == *$ref_date* ]]; then\n')
+            job_file_lines.append('if [[ " ${date_list[@]} " =~ " $ref_date " ]] ; then\n')
             job_file_lines.append('   cp -r ' + self.out_dir + '/reference /tmp\n')
             job_file_lines.append('   files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
             job_file_lines.append('   old=' + self.out_dir + '\n')
@@ -887,7 +902,7 @@ class JOB_SUBMIT:
 
             # merged/SLC
             job_file_lines.append('# merged/SLC\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$3}' """ + batch_file \
+            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
                 + """ | awk -F _ '{printf "%s\\n%s\\n",$5,$6}' | sort -n | uniq) )"""
             job_file_lines.append(str + '\n')
             job_file_lines.append('mkdir -p /tmp/merged/SLC\n\n')
@@ -928,6 +943,8 @@ class JOB_SUBMIT:
         #job_file_lines.append("export PYTHON_IO_CACHE_CWD=0\n")
         #job_file_lines.append("export PYTHON_IO_TargetDir="/scratch/07187/tg864867/codefalk\n")  #Suggestion from Lei@TACC 3/2021
 
+        # check space after copy-to-tmp
+        job_file_lines.append( "df -h /tmp\n" )
         # for MiNoPy jobs
         if not distribute is None:
             # DO NOT LOAD 'intel/19.1.1' HERE
@@ -986,6 +1003,7 @@ class JOB_SUBMIT:
             job_file_lines.append( "export LAUNCHER_JOB_FILE={0}\n".format(batch_file))
             job_file_lines.append( """export LAUNCHER_WORKDIR=/dev/shm\n""" )
             job_file_lines.append("\nexport SINGULARITYENV_PREPEND_PATH={0}:$PATH".format(self.stack_path))
+            job_file_lines.append( """cd /dev/shm\n""" )
             #job_file_lines.append("\nexport LAUNCHER_WORKDIR={0}".format(self.out_dir))
             #job_file_lines.append( "export PATH={0}:$PATH\n".format(self.stack_path))
 
@@ -999,8 +1017,12 @@ class JOB_SUBMIT:
                 job_file_lines.append("\nunset LD_PRELOAD\n")
                 job_file_lines.append("$LAUNCHER_DIR/paramrun\n")
 
+            # need to remove code because of a Stampede2/SLURM bug that sometimes not all files are removed
+            # job_file_lines.append( """rm -rf /tmp/rsmas_insar \n""" )
+
             with open(os.path.join(self.out_dir, job_file_name), "w+") as job_f:
                 job_f.writelines(job_file_lines)
+
 
         else:
 
@@ -1009,9 +1031,9 @@ class JOB_SUBMIT:
                                                                  os.path.abspath(batch_file) + '_{}.o'.format(count),
                                                                  os.path.abspath(batch_file) + '_{}.e'.format(count)))
 
-            if self.scheduler == 'SLURM':
+            #if self.scheduler == 'SLURM':
 
-               job_file_lines.append("\nexport LD_PRELOAD=/home1/apps/tacc-patches/python_cacher/myopen.so")
+            #   job_file_lines.append("\nexport LD_PRELOAD=/home1/apps/tacc-patches/python_cacher/myopen.so")
 
             job_file_lines.append("\n\nexport OMP_NUM_THREADS={0}".format(self.default_num_threads))
             job_file_lines.append("\nexport PATH={0}:$PATH".format(self.stack_path))
