@@ -1002,6 +1002,7 @@ class JOB_SUBMIT:
             job_file_lines.append( "################################################\n" )
             job_file_lines.append( "# execute tasks with launcher\n" )
             job_file_lines.append( "################################################\n" )
+            job_file_lines.append("nmodule load launcher\n")
             job_file_lines.append( "export OMP_NUM_THREADS={0}\n".format(self.default_num_threads))
             job_file_lines.append( "export LAUNCHER_PPN={0}\n".format(self.number_of_parallel_tasks_per_node))
             job_file_lines.append( "export LAUNCHER_NHOSTS={0}\n".format(number_of_nodes))
