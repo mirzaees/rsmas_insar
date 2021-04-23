@@ -1008,7 +1008,7 @@ class JOB_SUBMIT:
             job_file_lines.append( "export LAUNCHER_NHOSTS={0}\n".format(number_of_nodes))
             job_file_lines.append( "export LAUNCHER_JOB_FILE={0}\n".format(batch_file))
             job_file_lines.append( """export LAUNCHER_WORKDIR=/dev/shm\n""" )
-            job_file_lines.append("\nexport SINGULARITYENV_PREPEND_PATH={0}:$PATH".format(self.stack_path))
+            job_file_lines.append("export SINGULARITYENV_PREPEND_PATH={0}:$PATH\n".format(self.stack_path))
             job_file_lines.append( """cd /dev/shm\n""" )
             #job_file_lines.append("\nexport LAUNCHER_WORKDIR={0}".format(self.out_dir))
             #job_file_lines.append( "export PATH={0}:$PATH\n".format(self.stack_path))
