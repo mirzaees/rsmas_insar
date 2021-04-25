@@ -221,6 +221,8 @@ class JOB_SUBMIT:
             number_of_nodes = np.int(np.ceil(number_of_tasks * float(self.default_num_threads) / (
                     self.number_of_cores_per_node * self.number_of_threads_per_core)))
 
+            self.number_of_parallel_tasks_per_node = self.number_of_cores_per_node
+
             if not num_cores_per_task is None:
                 self.number_of_parallel_tasks_per_node = self.number_of_cores_per_node // num_cores_per_task
 
