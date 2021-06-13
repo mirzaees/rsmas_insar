@@ -31,7 +31,7 @@ import time
 import glob
 import numpy as np   #
 import math
-#from minsar.objects.auto_defaults import supported_platforms,  queue_config_file as queue_default
+
 import warnings
 import minsar.utils.process_utilities as putils
 from datetime import datetime
@@ -202,7 +202,12 @@ class JOB_SUBMIT:
         if self.platform_name in supported_platforms:
             #print('\nWorking on a {} machine ...\n'.format(self.scheduler))
 
+            # assume stripmap size corredponds to 8 busts
+            if self.prefix == 'stripmap':       
+               self.num_bursts = 8
+
             self.get_memory_walltime(batch_file, job_type='batch')
+
 
             if self.prefix == 'tops':
                 mlog(self.work_dir, 'job_submission.py --template {t} {a} --outdir {b} '
@@ -213,6 +218,7 @@ class JOB_SUBMIT:
                 mlog(self.work_dir, 'job_submission.py --template {t} {a} --outdir {b} '
                                                  '--writeonly'.format(t=self.custom_template_file,
                                                                       a=batch_file, b=self.out_dir))
+
 
             with open(batch_file, 'r') as f:
                 tasks = f.readlines()
@@ -698,10 +704,16 @@ class JOB_SUBMIT:
         job_file_lines.append( "cp $SCRATCH/miniconda3.tar /tmp\n" )
         job_file_lines.append( "tar xf /tmp/miniconda3.tar -C /tmp/rsmas_insar/3rdparty\n" )
         job_file_lines.append( "rm /tmp/miniconda3.tar\n" )
+        job_file_lines.append( "cp -r $RSMASINSAR_HOME/sources/isce2/contrib/stack/*  /tmp/rsmas_insar/3rdparty/miniconda3/share/isce2\n" )   
 
         job_file_lines.append( "# set environment    \n" )
         job_file_lines.append( "export RSMASINSAR_HOME=/tmp/rsmas_insar\n" )
-        job_file_lines.append( "cd $RSMASINSAR_HOME; source ~/accounts/platforms_defaults.bash; source setup/environment.bash; export PATH=$ISCE_STACK/topsStack:$PATH; cd -;\n" )
+
+        if self.prefix == 'stripmap':
+            job_file_lines.append( "cd $RSMASINSAR_HOME; source ~/accounts/platforms_defaults.bash; source setup/environment.bash; export PATH=$ISCE_STACK/stripmapStack:$PATH; cd -;\n" )
+        else:
+            job_file_lines.append( "cd $RSMASINSAR_HOME; source ~/accounts/platforms_defaults.bash; source setup/environment.bash; export PATH=$ISCE_STACK/topsStack:$PATH; cd -;\n" )
+
         job_file_lines.append( '# remove /scratch and /work from PATH\n' )
         job_file_lines.append( """export PATH=`echo ${PATH} | awk -v RS=: -v ORS=: '/scratch/ {next} {print}' | sed 's/:*$//'` \n""" )
         job_file_lines.append( """export PATH=`echo ${PATH} | awk -v RS=: -v ORS=: '/work/ {next} {print}' | sed 's/:*$//'` \n""" )
@@ -715,243 +727,425 @@ class JOB_SUBMIT:
             job_file_lines.append( "################################################\n" )
             job_file_lines.append( "# copy infiles to local /tmp and adjust *.xml  #\n" )
             job_file_lines.append( "################################################\n" )
+
+            if 'stampede2' in hostname:
+                job_file_lines.append( 'export CDTOOL=/scratch/01255/siliu/collect_distribute\n' )
+            elif 'frontera' in hostname:
+                job_file_lines.append( 'export CDTOOL=/scratch1/01255/siliu/collect_distribute\n' )
+
+            job_file_lines.append( 'module load intel/19.1.1 2> /dev/null\n' )
+            job_file_lines.append( 'export PATH=${PATH}:${CDTOOL}/bin\n' )  
+            job_file_lines.append( '\n' )                                   #keep `\n` for splitting and remove first 12 characters of line 
+
+        # run_02_unpack_secondary_slc
+        if "run_02_unpack_secondary_slc" in job_file_name:
+            job_file_lines.append( "################################################\n" )
+            job_file_lines.append("module load ooops\n")
+            job_file_lines.append("dummy-to-pop\n")
+        #job_file_lines.append("module load python_cacher \n")
+        #job_file_lines.append("export PYTHON_IO_CACHE_CWD=0\n")
+        #job_file_lines.append("export PYTHON_IO_TargetDir="/scratch/07187/tg864867/codefalk\n")  #Suggestion from Lei@TACC 3/2021
+
         # run_03_average_baseline
         if 'average_baseline' in job_file_name and not batch_file is None:
+            job_file_lines.append(""" 
             # reference
-            job_file_lines.append('# reference\n')
-            job_file_lines.append('cp -r ' + self.out_dir + '/reference /tmp\n')
-            job_file_lines.append('files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
+            #cp -r """ + self.out_dir + """/reference /tmp
+            distribute.bash """ + self.out_dir + """/reference
+            files="/tmp/reference/*.xml /tmp/reference/*/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files
             # secondarys
-            job_file_lines.append('# secondarys\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _ '{printf "%s\\n",$3}' ) )"""
-            job_file_lines.append(str + '\n')
-            job_file_lines.append('mkdir -p /tmp/secondarys\n')
-            job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
-            job_file_lines.append('    cp -r ' + self.out_dir + '/secondarys/' + '$date /tmp/secondarys\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/secondarys/????????/*.xml"\n')
-            job_file_lines.append('files2="/tmp/secondarys/????????/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files2\n')
+
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file + """ | awk -F _ '{printf "%s\\n",$NF}' ) )
+            mkdir -p /tmp/secondarys
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/secondarys/$date /tmp/secondarys
+                distribute.bash """ + self.out_dir + """/secondarys/$date /tmp/secondarys; mv /tmp/$date /tmp/secondarys
+            done
+            files1="/tmp/secondarys/????????/*.xml"
+            files2="/tmp/secondarys/????????/*/*.xml"
+            old=""" + self.out_dir + """ 
+            sed -i "s|$old|/tmp|g" $files1
+            sed -i "s|$old|/tmp|g" $files2
+            """)
+
 
         # run_04_fullBurst_geo2rdr
         if 'fullBurst_geo2rdr' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+
             # reference
-            job_file_lines.append('# reference\n')
-            job_file_lines.append('cp -r ' + self.out_dir + '/reference /tmp\n')
-            job_file_lines.append('files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
+            #cp -r """ + self.out_dir + """/reference /tmp
+            distribute.bash """ + self.out_dir + """/reference 
+            files="/tmp/reference/*.xml /tmp/reference/*/*.xml"
+            old=""" + self.out_dir + """ 
+            sed -i "s|$old|/tmp|g" $files
+
             # geom_reference
-            job_file_lines.append('# geom_reference\n')
-            job_file_lines.append('cp -r ' + self.out_dir + '/geom_reference /tmp\n')
-            job_file_lines.append('files="/tmp/geom_reference/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
+            #cp -r """ + self.out_dir + """/geom_reference /tmp
+            distribute.bash """ + self.out_dir + """/geom_reference 
+            files="/tmp/geom_reference/*/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files
+
             # secondarys
-            job_file_lines.append('# secondarys\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _ '{printf "%s\\n",$4}' ) )"""
-            job_file_lines.append(str + '\n')
-            job_file_lines.append('mkdir -p /tmp/secondarys\n')
-            job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
-            job_file_lines.append('    cp -r ' + self.out_dir + '/secondarys/' + '$date /tmp/secondarys\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/secondarys/????????/*.xml"\n')
-            job_file_lines.append('files2="/tmp/secondarys/????????/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files2\n')
+
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file +  """ | awk -F _ '{printf "%s\\n",$NF}' ) )
+            mkdir -p /tmp/secondarys
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/secondarys/$date /tmp/secondarys
+                distribute.bash """ + self.out_dir + """/secondarys/$date; mv /tmp/$date /tmp/secondarys
+            done
+            files1="/tmp/secondarys/????????/*.xml"
+            files2="/tmp/secondarys/????????/*/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
+            sed -i "s|$old|/tmp|g" $files2
+            """)
 
         # run_05_fullBurst_resample
         if 'fullBurst_resample' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
             # reference
-            job_file_lines.append('# reference\n')
-            job_file_lines.append('cp -r ' + self.out_dir + '/reference /tmp\n')
-            job_file_lines.append('files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
+            #cp -r """ + self.out_dir + """/reference /tmp
+            distribute.bash """ + self.out_dir + """/reference
+            files="/tmp/reference/*.xml /tmp/reference/*/*.xml"
+            old=""" + self.out_dir + """ 
+            sed -i "s|$old|/tmp|g" $files
+
             # secondarys
-            job_file_lines.append('# secondarys\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _ '{printf "%s\\n",$4}' ) )"""
-            job_file_lines.append(str + '\n')
-            job_file_lines.append('mkdir -p /tmp/secondarys\n')
-            job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
-            job_file_lines.append('    cp -r ' + self.out_dir + '/secondarys/' + '$date /tmp/secondarys\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/secondarys/????????/*.xml"\n')
-            job_file_lines.append('files2="/tmp/secondarys/????????/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files2\n')
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file +  """ | awk -F _ '{printf "%s\\n",$NF}' ) )
+            mkdir -p /tmp/secondarys
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/secondarys/$date /tmp/secondarys
+                distribute.bash """ + self.out_dir + """/secondarys/$date; mv /tmp/$date /tmp/secondarys
+            done
+            files1="/tmp/secondarys/????????/*.xml"
+            files2="/tmp/secondarys/????????/*/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
+            sed -i "s|$old|/tmp|g" $files2
+            """)
+
 
         # run_07_merge_reference_secondary_slc
         if 'merge_reference_secondary_slc' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+
             # stack
-            job_file_lines.append('# stack\n')
-            job_file_lines.append('cp -r ' + self.out_dir + '/stack /tmp\n')
-            job_file_lines.append('files="/tmp/stack/*xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
+            #cp -r """ + self.out_dir + """/stack /tmp
+            distribute.bash """ + self.out_dir + """/stack
+            files="/tmp/stack/*xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files
+
             # reference
-            job_file_lines.append('# reference\n')
-            job_file_lines.append('cp -r ' + self.out_dir + '/reference /tmp\n')
-            job_file_lines.append('files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
+            #cp -r """ + self.out_dir + """/reference /tmp
+            distribute.bash """ + self.out_dir + """/reference; files="/tmp/reference/*.xml /tmp/reference/*/*.xml"
+            old=""" + self.out_dir + """ 
+            sed -i "s|$old|/tmp|g" $files
+
             # coreg_secondarys      (different awk)
-            job_file_lines.append('# coreg_secondarys (different awk)\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _ '{printf "%s\\n",$3}' | sed -n '/^[0-9]/p' ) )"""
-            job_file_lines.append(str + '\n')
-            str = """ref_date=( $(xmllint --xpath 'string(/productmanager_name/component[@name="instance"]/property[@name="ascendingnodetime"]/value)' """ \
-                + self.out_dir + """/reference/IW*.xml | cut -d ' ' -f 1 | sed "s|-||g") )"""
-            job_file_lines.append(str + '\n')
-            job_file_lines.append("""# remove ref_date from array\n""")
-            job_file_lines.append("""index=$(echo ${date_list[@]/$ref_date//} | cut -d/ -f1 | wc -w | tr -d ' ')\n""")
-            job_file_lines.append("""unset date_list[$index]\n""")
-            job_file_lines.append("""mkdir -p /tmp/coreg_secondarys\n""")
-            job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
-            job_file_lines.append('    cp -r ' + self.out_dir + '/coreg_secondarys/' + '$date /tmp/coreg_secondarys\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/coreg_secondarys/????????/*.xml"\n')
-            job_file_lines.append('files2="/tmp/coreg_secondarys/????????/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files2\n')
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file + """ | awk -F _ '{printf "%s\\n",$NF}' | sed -n '/^[0-9]/p' ) )
+            ref_date=( $(xmllint --xpath 'string(/productmanager_name/component[@name="instance"]/property[@name="ascendingnodetime"]/value)' """ \
+                + self.out_dir + """/reference/IW*.xml | cut -d ' ' -f 1 | sed "s|-||g") )
+
+            # remove ref_date from array
+            index=$(echo ${date_list[@]/$ref_date//} | cut -d/ -f1 | wc -w | tr -d ' ')
+            unset date_list[$index]
+            if [[ ${#date_list[@]} -ne 0 ]]; then
+            mkdir -p /tmp/coreg_secondarys
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/coreg_secondarys/$date /tmp/coreg_secondarys
+                distribute.bash """ + self.out_dir + """/coreg_secondarys/$date; mv /tmp/$date /tmp/coreg_secondarys
+            done
+            files1="/tmp/coreg_secondarys/????????/*.xml"
+            files2="/tmp/coreg_secondarys/????????/*/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
+            sed -i "s|$old|/tmp|g" $files2
+            fi
+            """)
 
         # run_08_generate_burst_igram
         if 'generate_burst_igram' in job_file_name and not batch_file is None:
-            # awk '{printf "%s\\n",$6}' run_03_average_baseline_0 | awk -F _ '{printf "%s\\n",$3}' 
-            # awk '{printf "%s\\n",$6}' run_04_fullBurst_geo2rdr_0 | awk -F _ '{printf "%s\\n",$4}' 
-            # awk '{printf "%s\\n",$6}' run_05_fullBurst_resample_0 | awk -F _ '{printf "%s\\n",$4}' 
-            # awk '{printf "%s\\n",$6}' run_07_merge_reference_secondary_slc_0 | awk -F _ '{printf "%s\\n",$3}' 
+            # awk '{printf "%s\\n",$6}' run_03_average_baseline_0 | awk -F _ '{printf "%s\\n",$3}'
+            # awk '{printf "%s\\n",$6}' run_04_fullBurst_geo2rdr_0 | awk -F _ '{printf "%s\\n",$4}'
+            # awk '{printf "%s\\n",$6}' run_05_fullBurst_resample_0 | awk -F _ '{printf "%s\\n",$4}'
+            # awk '{printf "%s\\n",$6}' run_07_merge_reference_secondary_slc_0 | awk -F _ '{printf "%s\\n",$3}'
             # awk '{printf "%s\\n",$6}' run_08_generate_burst_igram | awk -F _ '{printf "%s\\n%s\\n",$4,$5}' | sort -n | uniq
             # awk '{printf "%s\\n",$6}' run_09_merge_burst_igram_0 | awk -F _merge_igram_ '{printf "%s\\n",$2}' | sort -n | uniq
             # awk '{printf "%s\\n",$6}' run_10_filter_coherence | awk -F _igram_filt_coh_ '{printf "%s\\n",$2}' | sort -n | uniq
             # awk '{printf "%s\\n",$6}' run_10_filter_coherence | awk -F _ '{printf "%s\\n %s\\n",$5,$6}' | sort -n | uniq
             # awk '{printf "%s\\n",$6}' run_11_unwrap | awk -F _igram_unw_ '{printf "%s\\n",$2}' | sort -n | uniq
+            job_file_lines.append("""
 
-            # coreg_secondarys
-            job_file_lines.append('# coreg_secondarys\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _ '{printf "%s\\n%s\\n",$4,$5}' | sort -n | uniq) )"""
-            job_file_lines.append(str + '\n')
-            str = """ref_date=( $(xmllint --xpath 'string(/productmanager_name/component[@name="instance"]/property[@name="ascendingnodetime"]/value)' """ \
-                + self.out_dir + """/reference/IW*.xml | cut -d ' ' -f 1 | sed "s|-||g") )"""
-            job_file_lines.append( str + '\n')
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file + """ | awk -F _ '{printf "%s\\n%s\\n",$(NF-1),$NF}' | sort -n | uniq ) )
+            ref_date=( $(xmllint --xpath 'string(/productmanager_name/component[@name="instance"]/property[@name="ascendingnodetime"]/value)' """ \
+                + self.out_dir + """/reference/IW*.xml | cut -d ' ' -f 1 | sed "s|-||g") )
+            
             # reference
-            job_file_lines.append('# reference date\n')
-            job_file_lines.append('if [[ " ${date_list[@]} " =~ " $ref_date " ]] ; then\n')
-            job_file_lines.append('   cp -r ' + self.out_dir + '/reference /tmp\n')
-            job_file_lines.append('   files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
-            job_file_lines.append('   old=' + self.out_dir + '\n')
-            job_file_lines.append('   sed -i "s|$old|/tmp|g" $files\n')
-            job_file_lines.append('fi\n')
-
-            # coreg_secondarys
-            job_file_lines.append('# coreg_secondarys\n')
-            job_file_lines.append("""# remove ref_date from array\n""")
-            job_file_lines.append("""index=$(echo ${date_list[@]/$ref_date//} | cut -d/ -f1 | wc -w | tr -d ' ')\n""")
-            job_file_lines.append("""unset date_list[$index]\n""")
-            job_file_lines.append("""mkdir -p /tmp/coreg_secondarys\n""")
-            job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
-            job_file_lines.append('    cp -r ' + self.out_dir + '/coreg_secondarys/' + '$date /tmp/coreg_secondarys\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/coreg_secondarys/????????/*.xml"\n')
-            job_file_lines.append('files2="/tmp/coreg_secondarys/????????/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files2\n')
+            if [[ " ${date_list[@]} " =~ " $ref_date " ]] ; then
+               #cp -r """ + self.out_dir + """/reference /tmp
+               distribute.bash """ + self.out_dir + """/reference
+               files="/tmp/reference/*.xml /tmp/reference/*/*.xml"
+               old=""" + self.out_dir + """ 
+               sed -i "s|$old|/tmp|g" $files
+            fi
+            
+            # remove ref_date from array
+            index=$(echo ${date_list[@]/$ref_date//} | cut -d/ -f1 | wc -w | tr -d ' ')
+            unset date_list[$index]
+            if [[ ${#date_list[@]} -ne 0 ]]; then
+            mkdir -p /tmp/coreg_secondarys
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/coreg_secondarys/$date /tmp/coreg_secondarys
+                distribute.bash """ + self.out_dir + """/coreg_secondarys/$date; mv /tmp/$date /tmp/coreg_secondarys
+            done
+            files1="/tmp/coreg_secondarys/????????/*.xml"
+            files2="/tmp/coreg_secondarys/????????/*/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
+            sed -i "s|$old|/tmp|g" $files2
+            fi
+            """)
+        
         # run_09_merge_burst_igram
         if 'merge_burst_igram' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+           
             # stack
-            job_file_lines.append('# stack\n')
-            job_file_lines.append('cp -r ' + self.out_dir + '/stack /tmp\n')
-            job_file_lines.append('files="/tmp/stack/*xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
+            #cp -r """ + self.out_dir + """/stack /tmp
+            distribute.bash """ + self.out_dir + """/stack
+            files="/tmp/stack/*xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files
 
             # interferograms
-            job_file_lines.append('# interferograms\n')
-            str = """pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _merge_igram_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
-            job_file_lines.append(str + '\n')
-            job_file_lines.append('mkdir -p /tmp/interferograms\n')
-            job_file_lines.append("""for pair in "${pair_list[@]}"; do\n""")
-            job_file_lines.append('   cp -r ' + self.out_dir + '/interferograms/' + '$pair /tmp/interferograms\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/interferograms/????????_????????/*.xml"\n')
-            job_file_lines.append('files2="/tmp/interferograms/????????_????????/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files2\n')
+            pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file + """ | awk -F _merge_igram_ '{printf "%s\\n",$2}' | sort -n | uniq) )
+            mkdir -p /tmp/interferograms
+            for pair in "${pair_list[@]}"; do
+               #cp -r """ + self.out_dir + """/interferograms/$pair /tmp/interferograms
+               distribute.bash """ + self.out_dir + """/interferograms/$pair; mv /tmp/$pair /tmp/interferograms
+            done
+            files1="/tmp/interferograms/????????_????????/*.xml"
+            files2="/tmp/interferograms/????????_????????/*/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
+            sed -i "s|$old|/tmp|g" $files2
+            """)
 
         # run_10_filter_coherence
         if 'filter_coherence' in job_file_name and not batch_file is None:
-            # merged/interferograms
-            job_file_lines.append('# merged/interferograms\n')
-            str = """pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _igram_filt_coh_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
-            job_file_lines.append(str + '\n')
-            job_file_lines.append('mkdir -p /tmp/merged/interferograms\n')
-            job_file_lines.append("""for pair in "${pair_list[@]}"; do\n""")
-            job_file_lines.append('   cp -r ' + self.out_dir + '/merged/interferograms/' + '$pair /tmp/merged/interferograms\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/merged/interferograms/????????_????????/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir +'\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
+            job_file_lines.append("""
+   
+            # merged/interferograms       
+            pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file + """ | awk -F _igram_filt_coh_ '{printf "%s\\n",$2}' | sort -n | uniq) )
+            mkdir -p /tmp/merged/interferograms
+            for pair in "${pair_list[@]}"; do
+               #cp -r """ + self.out_dir + """/merged/interferograms/$pair /tmp/merged/interferograms
+               distribute.bash """ + self.out_dir + """/merged/interferograms/$pair; mv /tmp/$pair /tmp/merged/interferograms
+            done
+            files1="/tmp/merged/interferograms/????????_????????/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
 
             # merged/SLC
-            job_file_lines.append('# merged/SLC\n')
-            str = """date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _ '{printf "%s\\n%s\\n",$5,$6}' | sort -n | uniq) )"""
-            job_file_lines.append(str + '\n')
-            job_file_lines.append('mkdir -p /tmp/merged/SLC\n\n')
-            job_file_lines.append("""for date in "${date_list[@]}"; do\n""")
-            job_file_lines.append('   cp -r ' + self.out_dir + '/merged/SLC/' + '$date /tmp/merged/SLC\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/merged/SLC/????????/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file + """ | awk -F _ '{printf "%s\\n%s\\n",$(NF-1),$NF}' | sort -n | uniq) )
+            mkdir -p /tmp/merged/SLC
+            for date in "${date_list[@]}"; do
+               #cp -r """ + self.out_dir + """/merged/SLC/$date /tmp/merged/SLC
+               distribute.bash """ + self.out_dir + """/merged/SLC/$date; mv /tmp/$date /tmp/merged/SLC
+            done
+            files1="/tmp/merged/SLC/????????/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
+            """)
 
         # run_11_unwrap
         if 'unwrap' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+
             # reference
-            job_file_lines.append('# reference\n')
-            job_file_lines.append('cp -r ' + self.out_dir + '/reference /tmp\n')
-            job_file_lines.append('files="/tmp/reference/*.xml /tmp/reference/*/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files\n')
+            #cp -r """ + self.out_dir + """/reference /tmp
+            distribute.bash """ + self.out_dir + """/reference /tmp
+            files="/tmp/reference/*.xml /tmp/reference/*/*.xml"
+            old=""" + self.out_dir + """ 
+            sed -i "s|$old|/tmp|g" $files
+            
+            # merged/interferograms       
+            pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file + """ | awk -F _igram_unw_ '{printf "%s\\n",$2}' | sort -n | uniq) )
+            mkdir -p /tmp/merged/interferograms
+            for pair in "${pair_list[@]}"; do
+               #cp -r """ + self.out_dir + """/merged/interferograms/$pair /tmp/merged/interferograms
+               distribute.bash """ + self.out_dir + """/merged/interferograms/$pair; mv /tmp/$pair /tmp/merged/interferograms
+            done
+            files1="/tmp/merged/interferograms/????????_????????/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
+            """)
 
-            # merged/interferograms
-            job_file_lines.append('# merged/interferograms\n')
-            str = """pair_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file \
-                + """ | awk -F _igram_unw_ '{printf "%s\\n",$2}' | sort -n | uniq) )"""
-            job_file_lines.append(str + '\n')
-            job_file_lines.append('mkdir -p /tmp/merged/interferograms\n')
-            job_file_lines.append("""for pair in "${pair_list[@]}"; do\n""")
-            job_file_lines.append('   cp -r ' + self.out_dir + '/merged/interferograms/' + '$pair /tmp/merged/interferograms\n')
-            job_file_lines.append('done\n')
-            job_file_lines.append('files1="/tmp/merged/interferograms/????????_????????/*.xml"\n')
-            job_file_lines.append('old=' + self.out_dir + '\n')
-            job_file_lines.append('sed -i "s|$old|/tmp|g" $files1\n')
+        #####################################################
+        ##############  stripmap ############################
+        #####################################################
+
+        # run_01_crop
+        if 'crop' in job_file_name and not batch_file is None:
+            job_file_lines.append(""" 
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file +  """ | awk -F _ '{printf "%s\\n",$NF}' ) )
+            mkdir -p /tmp/SLC
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/SLC/$date /tmp/SLC
+                distribute.bash """ + self.out_dir + """/SLC/$date; mv /tmp/$date /tmp/SLC
+            done
+            files1="/tmp/SLC/????????/*.xml"
+            old=""" + self.out_dir + """
+            sed -i "s|$old|/tmp|g" $files1
+            """)
+        # run_02_reference:  no copy-to-tmp: only one file
+        # run_03_focus_split: no copy-to-tmp because writes into output directory
+
+        # run_04_geo2rdr_coarseResamp
+        if 'geo2rdr_coarseResamp' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+ 
+            # cropped reference and secondarys
+            ref_date=( $(awk '{printf "%s\\n",$6}' """ + self.out_dir +  """/run_files/run_02_reference | awk -F _ '{printf "%s\\n",$NF}' ) )
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file +  """ | awk -F _ '{printf "%s\\n",$NF}' ) )
+            mkdir -p /tmp/SLC_crop
+            #cp -r """ + self.out_dir + """/SLC_crop/$ref_date /tmp/SLC_crop
+            distribute.bash """ + self.out_dir + """/SLC_crop/$ref_date; mv /tmp/$ref_date /tmp/SLC_crop
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/SLC_crop/$date /tmp/SLC_crop
+                distribute.bash """ + self.out_dir + """/SLC_crop/$date; mv /tmp/$date /tmp/SLC_crop
+            done
+
+            files="/tmp/SLC_crop/*/*.xml"
+            old=""" + self.out_dir + """ 
+            sed -i "s|$old|/tmp|g" $files
+            
+            # geom_reference
+            mkdir -p /tmp/merged
+            #cp -r """ + self.out_dir + """/merged/geom_reference /tmp/merged
+            distribute.bash """ + self.out_dir + """/merged/geom_reference; mv /tmp/geom_reference /tmp/merged
+             """)
+
+        # run_05_refineSecondaryTiming
+        if 'refineSecondaryTimin' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+ 
+            mkdir -p /tmp/SLC_crop
+            mkdir -p /tmp/coregSLC/Coarse
+            
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file +  """ | awk -F _ '{printf "%s\\n",$NF}' |  sort -n | uniq ) )
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/SLC_crop/$date /tmp/SLC_crop
+                #cp -r """ + self.out_dir + """/coregSLC/Coarse/$date /tmp/coregSLC/Coarse
+                distribute.bash """ + self.out_dir + """/SLC_crop/$date; mv /tmp/$date /tmp/SLC_crop
+                distribute.bash """ + self.out_dir + """/coregSLC/Coarse/$date; mv /tmp/$date /tmp/coregSLC/Coarse
+            done
+
+            files1="/tmp/SLC_crop/*/*.xml"
+            files2="/tmp/coregSLC/Coarse/*/*.xml"
+            old=""" + self.out_dir + """ 
+            sed -i "s|$old|/tmp|g" $files1
+            sed -i "s|$old|/tmp|g" $files2
+             """)
+
+        # run_06_invertMisreg : only one process. Coule be copied over if needed
+
+        # run_07_fineResamp
+        if 'fineResamp' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+ 
+            mkdir -p /tmp/SLC_crop
+            mkdir -p /tmp/coregSLC/Coarse
+            mkdir -p /tmp/offsets
+            
+            ref_date=( $(awk '{printf "%s\\n",$6}' """ + self.out_dir +  """/run_files/run_02_reference | awk -F _ '{printf "%s\\n",$NF}' ) )
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file +  """ | grep config_fineResamp | awk -F _ '{printf "%s\\n",$NF}' ) )
+
+            #cp -r """ + self.out_dir + """/SLC_crop/$ref_date /tmp/SLC_crop
+            distribute.bash """ + self.out_dir + """/SLC_crop/$ref_date; mv /tmp/$ref_date /tmp/SLC_crop
+            
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/SLC_crop/$date /tmp/SLC_crop
+                #cp -r """ + self.out_dir + """/coregSLC/Coarse/$date /tmp/coregSLC/Coarse
+                #cp -r """ + self.out_dir + """/offsets/$date /tmp/offsets
+                distribute.bash """ + self.out_dir + """/SLC_crop/$date; mv /tmp/$date /tmp/SLC_crop
+                distribute.bash """ + self.out_dir + """/coregSLC/Coarse/$date; mv /tmp/$date /tmp/coregSLC/Coarse
+                distribute.bash """ + self.out_dir + """/offsets/$date; mv /tmp/$date /tmp/offsets
+            done
+
+            files1="/tmp/SLC_crop/*/*.xml"
+            files2="/tmp/coregSLC/Coarse/*/*.xml"
+            files3="/tmp/offsets/*/*.xml"
+            old=""" + self.out_dir + """ 
+            sed -i "s|$old|/tmp|g" $files1
+            sed -i "s|$old|/tmp|g" $files2
+            sed -i "s|$old|/tmp|g" $files3
+
+             """)
+
+        # run_08_grid_baseline
+        if 'grid_baseline' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+ 
+            mkdir -p /tmp/merged/SLC
+           
+            ref_date=( $(awk '{printf "%s\\n",$6}' """ + self.out_dir +  """/run_files/run_02_reference | awk -F _ '{printf "%s\\n",$NF}' ) )
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file +  """ | awk -F _ '{printf "%s\\n",$NF}' ) )
+            
+            #cp -r """ + self.out_dir + """/merged/SLC/$ref_date/ /tmp/merged/SLC
+            #distribute.bash """ + self.out_dir + """/merged/SLC/$ref_date/; mv /tmp/$ref_date /tmp/merged/SLC
+            
+            date_list+=($ref_date)
+            #date_list=( $(echo "${date_list[@]}" | sort -n | uniq) )
+            date_list=( $(printf "%s\\n" ${date_list[@]} | sort -n | uniq) )
+
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/merged/SLC/$date/ /tmp/merged/SLC
+                distribute.bash """ + self.out_dir + """/merged/SLC/$date/; mv /tmp/$date /tmp/merged/SLC
+            done
+
+             """)
+
+        # run_09_igram
+        if 'run_09_igram' in job_file_name and not batch_file is None:
+            job_file_lines.append("""
+ 
+            mkdir -p /tmp/merged/SLC
+            mkdir -p /tmp/SLC_crop
+           
+            ref_date=( $(awk '{printf "%s\\n",$6}' """ + self.out_dir +  """/run_files/run_02_reference | awk -F _ '{printf "%s\\n",$NF}' ) )
+            date_list=( $(awk '{printf "%s\\n",$6}' """ + batch_file + """ | awk -F _ '{printf "%s\\n%s\\n",$(NF-1),$NF}' ) )
+            
+            #cp -r """ + self.out_dir + """/merged/SLC/$ref_date/ /tmp/merged/SLC
+            #distribute.bash """ + self.out_dir + """/merged/SLC/$ref_date/; mv /tmp/$ref_date /tmp/merged/SLC
+            
+            date_list+=($ref_date)
+            date_list=( $(printf "%s\\n" ${date_list[@]} | sort -n | uniq) )
 
 
-        if "run_02_unpack_secondary_slc" in job_file_name:
-            job_file_lines.append( "################################################\n" )
-            job_file_lines.append("module load ooops\n")
-        #job_file_lines.append("module load python_cacher \n")
-        #job_file_lines.append("export PYTHON_IO_CACHE_CWD=0\n")
-        #job_file_lines.append("export PYTHON_IO_TargetDir="/scratch/07187/tg864867/codefalk\n")  #Suggestion from Lei@TACC 3/2021
+            for date in "${date_list[@]}"; do
+                #cp -r """ + self.out_dir + """/merged/SLC/$date/ /tmp/merged/SLC
+                distribute.bash """ + self.out_dir + """/merged/SLC/$date/; mv /tmp/$date /tmp/merged/SLC
+                distribute.bash """ + self.out_dir + """/SLC_crop/$date/; mv /tmp/$date /tmp/SLC_crop
+            done
+
+             """)
+
+
+        tmp1 = job_file_lines.pop()
+        tmp2 = tmp1.split('\n')
+        tmp3 = []
+        for item in tmp2:
+            job_file_lines.append( item[12:] + '\n')
+        #import pdb; pdb.set_trace()
 
         # check space after copy-to-tmp
-        job_file_lines.append( "df -h /tmp\n" )
+        job_file_lines.append( """echo After copy-to-tmp: `df -h /tmp`\n""" )
         # for MiNoPy jobs
         if not distribute is None:
             # DO NOT LOAD 'intel/19.1.1' HERE

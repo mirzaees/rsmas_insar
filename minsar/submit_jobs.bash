@@ -58,13 +58,26 @@ usage: submit_jobs.bash custom_template_file [--start] [--stop] [--dostep] [--he
     exit 0;
 else
     PROJECT_NAME=$(basename "$1" | cut -d. -f1)
+    PROJECT_NAME=$(basename "$1" | awk -F ".template" '{print $1}')
 fi
 WORKDIR=$SCRATCHDIR/$PROJECT_NAME
 RUNFILES_DIR=$WORKDIR"/run_files"
 
 cd $WORKDIR
 
+##### For proper logging to both file and stdout #####
+num_logfiles=$(ls $WORKDIR/process*.log | wc -l)
+logfile_name="${WORKDIR}/process${num_logfiles}.log"
+printf '' > $logfile_name
+tail -f $logfile_name & 
+trap "pkill -P $$" EXIT
+exec 1>>$logfile_name 2>>$logfile_name
+######################################################
+
 randomorder=false
+rapid=false
+wait_time=30
+
 startstep=1
 stopstep="insarmaps"
 
@@ -82,10 +95,10 @@ do
             shift # past value
             ;;
         --stop)
-                stopstep="$2"
-                shift
-                shift
-                ;;
+            stopstep="$2"
+            shift
+            shift
+            ;;
         --dostep)
             startstep="$2"
             stopstep="$2"
@@ -94,6 +107,11 @@ do
             ;;
         --random)
             randomorder=true
+            shift
+            ;;
+        --rapid)
+            rapid=true
+            wait_time=10
             shift
             ;;
         *)
@@ -129,15 +147,18 @@ step_io_load_list=(
 
     [smallbaseline_wrapper]=1
     [insarmaps]=1
+
+    [crop]=1
 )
 
 
 
 
-#find the last job (11 for 'geometry' and 16 for 'NESD')
+#find the last job (11 for 'geometry' and 16 for 'NESD') and remove leading zero
 job_file_arr=(run_files/run_*_0.job)
 last_job_file=${job_file_arr[-1]}
 last_job_file_number=${last_job_file:14:2}
+last_job_file_number=$(echo $last_job_file_number | sed 's/^0*//')
 
 if [[ $startstep == "ifgrams" ]]; then
     startstep=1
@@ -188,6 +209,10 @@ for g in "${globlist[@]}"; do
         sbc_command="$sbc_command --random"
         echo "Jobs are being submitted in random order. Submission order is likely different from the order above."
     fi
+    if $rapid; then
+        sbc_command="$sbc_command --rapid"
+        echo "Rapid job submission enabled."
+    fi
     jns=$($sbc_command)
 
     exit_status="$?"
@@ -205,12 +230,15 @@ for g in "${globlist[@]}"; do
     num_running=0
     num_pending=0
     num_timeout=0
+    num_waiting=0
 
     while [[ $num_complete -lt $num_jobs ]]; do
         num_complete=0
         num_running=0
         num_pending=0
-        sleep 30
+        num_waiting=0
+        sleep $wait_time
+
         for (( j=0; j < "${#jobnumbers[@]}"; j++)); do
             file=${files[$j]}
             file_pattern="${file%.*}"
@@ -225,20 +253,22 @@ for g in "${globlist[@]}"; do
                 num_running=$(($num_running+1))
             elif [[ $state == *"PENDING"* ]]; then
                 num_pending=$(($num_pending+1))
-            elif [[ $state == *"TIMEOUT"* ]]; then
+            elif [[ $state == *"TIMEOUT"* || $state == *"NODE_FAIL"* ]]; then
                 num_timeout=$(($num_timeout+1))
                 step_max_tasks=$(echo "$step_max_tasks_unit/${step_io_load_list[$step_name]}" | bc | awk '{print int($1)}')
         
-                init_walltime=$(grep -oP '(?<=#SBATCH -t )[0-9]+:[0-9]+:[0-9]+' $file)
-                echo "Timedout with walltime of ${init_walltime}."
-                                
-                # Compute a new walltime and update the job file
-                update_walltime.py "$file" &> /dev/null
-                updated_walltime=$(grep -oP '(?<=#SBATCH -t )[0-9]+:[0-9]+:[0-9]+' $file)
+                if [[ $state == *"TIMEOUT"* ]]; then
+                    init_walltime=$(grep -oP '(?<=#SBATCH -t )[0-9]+:[0-9]+:[0-9]+' $file)
+                    echo "${file} timedout with walltime of ${init_walltime}."
+                                    
+                    # Compute a new walltime and update the job file
+                    update_walltime.py "$file" &> /dev/null
+                    updated_walltime=$(grep -oP '(?<=#SBATCH -t )[0-9]+:[0-9]+:[0-9]+' $file)
 
-                datetime=$(date +"%Y-%m-%d:%H-%M")
-                echo "${datetime}: re-running: ${file}: ${init_walltime} --> ${updated_walltime}" >> "${RUNFILES_DIR}"/rerun.log
-                echo "Resubmitting file (${file}) with new walltime of ${updated_walltime}"
+                    datetime=$(date +"%Y-%m-%d:%H-%M")
+                    echo "${datetime}: re-running: ${file}: ${init_walltime} --> ${updated_walltime}" >> "${RUNFILES_DIR}"/rerun.log
+                    echo "Resubmitting file (${file}) with new walltime of ${updated_walltime}"
+                fi
 
                 jobnumbers=($(remove_from_list $jobnumber "${jobnumbers[@]}"))
                 files=($(remove_from_list $jf "${files[@]}"))
@@ -260,12 +290,13 @@ for g in "${globlist[@]}"; do
                 echo "Job failed. Exiting."
                 exit 1; 
             else
+                echo "Strange job state: $state, encountered."
                 continue;
             fi
 
         done
 
-        num_waiting=$(($num_jobs - $num_completed - $num_running - $num_pending - $num_timeout))
+        num_waiting=$(($num_jobs-$num_complete-$num_running-$num_pending))
 
         printf "%s, %s, %-7s: %-12s, %-10s, %-10s, %-12s.\n" "$PROJECT_NAME" "$step_name_long" "$num_jobs jobs" "$num_complete COMPLETED" "$num_running RUNNING" "$num_pending PENDING" "$num_waiting WAITING"
     done

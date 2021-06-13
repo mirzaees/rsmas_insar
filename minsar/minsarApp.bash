@@ -27,20 +27,25 @@ helptext="                                                                      
     printf "$helptext"
     exit 0;
 else
-    PROJECT_NAME=$(basename "$1" | cut -d. -f1)
+    PROJECT_NAME=$(basename "$1" | awk -F ".template" '{print $1}')
     exit_status="$?"
     if [[ $PROJECT_NAME == "" ]]; then
        echo "Could not compute basename for that file. Exiting. Make sure you have specified an input file as the first argument."
        exit 1;
     fi
 fi
+
 template_file=$1
+if [[ $1 == $PWD ]]; then
+   template_file=$TEMPLATES/$PROJECT_NAME.template
+fi
+
 WORK_DIR=$SCRATCHDIR/$PROJECT_NAME
 
 mkdir -p $WORK_DIR
 cd $WORK_DIR
 
-echo "$(date +"%Y%m%d:%H-%m") * `basename "$0"` $@ " >> "${WORK_DIR}"/log
+echo "$(date +"%Y%m%d:%H-%m") * `basename "$0"` $@ " | tee -a "${WORK_DIR}"/log
 
 while [[ $# -gt 0 ]]
 do
@@ -168,6 +173,10 @@ elif [[ $stopstep != "" ]]; then
     exit 1
 fi
 
+# this works for logiginhg to process.log, but doe snot wroiite to screen
+#exec 3>&1 1>process1.log 2>&1
+
+
 ####################################
 if  ! test -f "$SCRATCH/miniconda3.tar" ; then
     echo "Copying miniconda3.tar to SCRATCH ..."
@@ -186,8 +195,12 @@ fi
 # download latest orbits from ASF mirror
 cd $SCRATCHDIR/S1orbits
 curl --ftp-ssl --silent --use-ascii --ftp-method nocwd --list-only https://s1qc.asf.alaska.edu/aux_poeorb/ > ASF_poeorb.txt
+curl --ftp-ssl --silent --use-ascii --ftp-method nocwd --list-only https://s1qc.asf.alaska.edu/aux_resorb/ > ASF_resorb.txt
 cat ASF_poeorb.txt | awk '{printf "! test -f %s && wget -c https://s1qc.asf.alaska.edu/aux_poeorb/%s\n", substr($0,10,77), substr($0,10,77)}' | grep 20210[4-9] > ASF_poeorb_latest.txt
+cat ASF_resorb.txt | awk '{printf "! test -f %s && wget -c https://s1qc.asf.alaska.edu/aux_resorb/%s\n", substr($0,10,77), substr($0,10,77)}' | grep 20210[4-9] > ASF_resorb_latest.txt
 bash ASF_poeorb_latest.txt
+#bash ASF_resorb_latest.txt
+
 cd -
 ####################################
 download_dir=$WORK_DIR/SLC
@@ -214,11 +227,10 @@ if [[ $download_flag == "1" ]]; then
     
     runs=1
     while [ $exit_status -ne 0 ] && [ $runs -le 4 ]; do
-        echo "ssara_federated_query.bash exited with a non-zero exit code ($exit_status). Trying again in 5 hours."
-        echo "$(date +"%Y%m%d:%H-%m") * Something went wrong. Exit code was ${exit_status}. Trying again in 5 hours" >> /log
-        echo "$(date +"%Y%m%d:%H-%m") * Something went wrong. Exit code was ${exit_status}. Trying again in 5 hours" >> ../log
+        echo "ssara_federated_query.bash exited with a non-zero exit code ($exit_status). Trying again in 2 hours."
+        echo "$(date +"%Y%m%d:%H-%m") * Something went wrong. Exit code was ${exit_status}. Trying again in 2 hours" | tee -a log | tee -a ../log
 
-        sleep 180 # sleep for 5 hours
+        sleep 7200 # sleep for 2 hours
         bash ../ssara_command.txt
         exit_status="$?"
         runs=$((runs+1))
@@ -252,8 +264,16 @@ if [[ $jobfiles_flag == "1" ]]; then
        echo "create_jobfile.py exited with a non-zero exit code ($exit_status). Exiting."
        exit 1;
     fi
-    
+
     # modify config files to use /tmp on compute node 
+
+    acquisition_mode=$(grep acquisition_mode $template_file  | cut -d '=' -f 2)
+
+    if [[ $acquisition_mode != *"stripmap"* ]]; then
+    
+    #########################
+    ###   topsStack   ###
+    #########################
 
     # run_03_average_baseline`
     files="configs/config_baseline_*"
@@ -342,13 +362,6 @@ if [[ $jobfiles_flag == "1" ]]; then
     new="input : /tmp"
     sed -i "s|$old|$new|g" $files
 
-    #old="slc1 : $PWD/merged/SLC"
-    #new="slc1 : /tmp"
-    #sed -i "s|$old|$new|g" $files
-    #old="slc2 : $PWD/merged/SLC"
-    #new="slc2 : /tmp"
-    #sed -i "s|$old|$new|g" $files
-
     # run_11_unwrap
     files="configs/config_igram_unw_*"
 
@@ -364,6 +377,67 @@ if [[ $jobfiles_flag == "1" ]]; then
     new="reference : /tmp"
     sed -i "s|$old|$new|g" $files
 
+    else
+    #########################
+    ###   stripmapStack   ###
+    #########################
+
+    # run_01_crop
+    files="configs/config_crop_????????"
+
+    old="input : $PWD"
+    new="input : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    # run_04_geo2rdr_coarseResamp
+    files="configs/config_geo2rdr_coarseResamp_????????"
+
+    old="reference : $PWD"
+    new="reference : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    old="secondary : $PWD"
+    new="secondary : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    # run_07_fineResamp
+    files="configs/config_fineResamp_????????"
+
+    old="reference : $PWD"
+    new="reference : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    old="secondary : $PWD"
+    new="secondary : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    old="offsets : $PWD"
+    new="offsets : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    # run_08_grid_baseline
+    files="configs/config_baselinegrid_????????"
+
+    old="reference : $PWD"
+    new="reference : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    old="secondary : $PWD"
+    new="secondary : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    # run_09_igram
+    files="configs/config_igram_????????_????????"
+
+    old="reference : $PWD"
+    new="reference : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    old="secondary : $PWD"
+    new="secondary : /tmp"
+    sed -i "s|$old|$new|g" $files
+
+    fi
 
 fi
 
@@ -373,11 +447,12 @@ if [[ $ifgrams_flag == "1" ]]; then
     #timeout 0.1 ls  $WEATHER_DIR/ERA5/* >> /dev/null ; echo $?
     #cmd_try="download_ERA5_data.py --date_list SAFE_files.txt $template_file"
 
+    # need to use differnt date_list file for CSK
     download_ERA5_cmd=`which download_ERA5_data.py`
-    cmd="$download_ERA5_cmd --date_list SAFE_files.txt $template_file"
+    cmd="$download_ERA5_cmd --date_list SAFE_files.txt $template_file --weather_dir $WEATHER_DIR "
     echo " Running.... python $cmd >& out_download_ERA5_data.e &"
     python $cmd >& out_download_ERA5_data.e &
-    echo "$(date +"%Y%m%d:%H-%m") * $cmd" >> "${WORKDIR}"/log
+    echo "$(date +"%Y%m%d:%H-%m") * download_ERA5_data.py --date_list SAFE_files.txt $template_file --weather_dir $WEATHER_DIR " >> "${WORK_DIR}"/log
 
  
     cmd="submit_jobs.bash $template_file --stop ifgrams"

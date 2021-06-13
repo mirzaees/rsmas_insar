@@ -52,11 +52,14 @@ def  run_generate_chunk_template_files(inps):
 
     location_name, sat_direction, sat_track = putils.split_project_name(project_name)
 
+    location_name = location_name.split('Big')[0]
+
     chunk_templates_dir = inps.work_dir + '/chunk_templates'
     os.makedirs(chunk_templates_dir, exist_ok=True)
  
     commands_file = inps.work_dir + '/minsar_commands.txt'
     f = open(commands_file, "w")
+    commands = []
 
     if inps.download_flag == True:
         minsarApp_option = '--start download'
@@ -100,12 +103,15 @@ def  run_generate_chunk_template_files(inps):
         putils.write_template_file(chunk_template_file, custom_tempObj)
         putils.beautify_template_file(chunk_template_file)
 
-        minsar_command = 'minsarApp.bash ' + chunk_template_file + ' ' + minsarApp_option
+        minsar_command = 'mkdir ' + os.getenv('SCRATCHDIR') + '/' + chunk_name[0] + ' && cd "$_"; minsarApp.bash ' + chunk_template_file + ' ' + minsarApp_option 
 
         f.write(minsar_command + '\n')
+        commands.append(minsar_command)
         
         lat = lat + inps.lat_step
     
+    for item in commands:
+       print(item)
     return
 
 ###########################################################################################

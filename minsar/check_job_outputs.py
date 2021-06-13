@@ -26,11 +26,13 @@ def main(iargs=None):
     known_issues_file = os.path.join(os.getenv('RSMASINSAR_HOME'), 'docs/known_issues.md')
 
     error_happened = False
-    error_strings  = [
+    error_strings = [
                     'No annotation xml file found in zip file',
                     'There appears to be a gap between slices. Cannot stitch them successfully',
                     'no element found: line',
-                    'Exiting ...',
+                    'mismatched tag: line 77, column 6',
+                    'SLCs are sliced differently with different versions of the processor',
+                    'Exiting ...',                # remove if above works fine (5/21)
                     'Segmentation fault',
                     'Bus',
                     'Aborted',
@@ -39,16 +41,16 @@ def main(iargs=None):
                     'FileNotFoundError',
                     'IOErr',
                     'Traceback'
-                   ]
-
-    #job_file = inps.job_files[0]
-    #job_name = job_file.split('.')[0]
-    #job_files = inps.job_files
+                    ]
+    different_number_of_bursts_string = [
+                    'has different number of bursts',
+                    ]
 
     job_names=[]
     for job_file in inps.job_files:
-        job_names.append(job_file.split('.')[0])
-       
+        tmp=job_file.split('.')
+        job_names.append('.'.join(tmp[0:-1]))
+
     job_file = inps.job_files[0]
     job_name = job_names[0]
 
@@ -58,28 +60,31 @@ def main(iargs=None):
         run_file_base = job_name
 
     matched_error_strings = []
+    matched_data_problem_strings = []
     for job_name in job_names:
        print('checking *.e, *.o from ' + job_name + '.job')
-       #job_name = job_file.split('.')[0]
 
-       if 'filter_coherence' in job_name:
-           remove_line_counter_lines_from_error_files(run_file=job_name)
+       # preprocess *.e files
+       if 'filter_coherence' in job_name or 'run_09_igram' in job_name:               # run_09_igram is for stripmap
+           putils.remove_line_counter_lines_from_error_files(run_file=job_name)
 
-       if 'run_' in job_name:
-           remove_zero_size_or_length_error_files(run_file=job_name)
-       
-       if 'run_' in job_name:
-           putils.remove_launcher_message_from_error_file(run_file=job_name)
+       # 5/21: sometimes not working. Move before loop using run_file_base ??
+       putils.remove_zero_size_or_length_error_files(run_file=job_name)
+       putils.remove_launcher_message_from_error_file(run_file=job_name)
+       putils.remove_ssh_warning_message_from_error_file(run_file=job_name)
+       putils.remove_zero_size_or_length_error_files(run_file=job_name)
+       putils.remove_timeout_error_files(run_file=job_name)
 
-       if 'run_' in job_name:
-           putils.remove_zero_size_or_length_error_files(run_file=job_name)
-       
-       error_files = glob.glob(job_name + '*.e')
-       out_files = glob.glob(job_name + '*.o')
-       error_files.sort()
-       out_files.sort()
-       #error_files = natsorted(error_files)
-       #out_files =  natsorted(out_files)
+       # analyze *.e and *.o files
+       error_files = natsorted( glob.glob(job_name + '*.e') )
+       out_files = natsorted( glob.glob(job_name + '*.o') )
+
+       if 'extract_stack_valid_region' in job_name:               
+          for file in out_files:
+              string = different_number_of_bursts_string[0]
+              if check_words_in_file(file, string):
+                 matched_data_problem_strings.append('Warning: \"' + string + '\" found in ' + file + '\n')
+                 print( 'Warning: \"' + string + '\" found in ' + file )
 
        for file in error_files + out_files:
            for error_string in error_strings:
@@ -94,6 +99,12 @@ def main(iargs=None):
             f.write(''.join(matched_error_strings))
     else:
         print("no known error found")
+
+    if len(matched_data_problem_strings) != 0:
+        with open(run_file_base + '_data_problem_matches.e', 'w') as f:
+            f.write(''.join(matched_data_problem_strings))
+    else:
+        print("no known data problem found")
         
     if 'run_' in job_name:
          concatenate_error_files(run_file=run_file, work_dir=project_dir)
@@ -102,7 +113,7 @@ def main(iargs=None):
          os.popen('cp {a} {b}'.format(a=error_files[-1], b=out_error_file))
          #shutil.copy(error_files[-1], out_error_file)
 
-    if len(matched_error_strings) != 0:
+    if len(matched_error_strings) + len(matched_data_problem_strings) != 0:
         print('For known issues see https://github.com/geodesymiami/rsmas_insar/tree/master/docs/known_issues.md')
         raise RuntimeError('Error in run_file: ' + run_file_base)
 
