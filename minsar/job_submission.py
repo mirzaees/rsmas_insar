@@ -227,10 +227,10 @@ class JOB_SUBMIT:
             number_of_nodes = np.int(np.ceil(number_of_tasks * float(self.default_num_threads) / (
                     self.number_of_cores_per_node * self.number_of_threads_per_core)))
 
-            self.number_of_parallel_tasks_per_node = self.number_of_cores_per_node
+            self.number_of_parallel_tasks_per_node = self.number_of_cores_per_node * number_of_nodes
 
             if not num_cores_per_task is None:
-                self.number_of_parallel_tasks_per_node = self.number_of_cores_per_node // num_cores_per_task
+                self.number_of_parallel_tasks_per_node = (self.number_of_cores_per_node // num_cores_per_task) * number_of_nodes
 
             if 'singleTask' in self.submission_scheme:
 
@@ -1198,7 +1198,7 @@ class JOB_SUBMIT:
             job_file_lines.append( "################################################\n" )
             job_file_lines.append( "# execute tasks with launcher\n" )
             job_file_lines.append( "################################################\n" )
-            job_file_lines.append("nmodule load launcher\n")
+            job_file_lines.append("module load launcher\n")
             job_file_lines.append( "export OMP_NUM_THREADS={0}\n".format(self.default_num_threads))
             job_file_lines.append( "export LAUNCHER_PPN={0}\n".format(self.number_of_parallel_tasks_per_node))
             job_file_lines.append( "export LAUNCHER_NHOSTS={0}\n".format(number_of_nodes))
